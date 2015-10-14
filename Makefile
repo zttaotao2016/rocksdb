@@ -288,9 +288,14 @@ TESTS = \
 	sst_dump_test \
 	compact_files_test \
 	perf_context_test \
-	blkcache_test \
-	hash_table_test \
-	hash_table_microbench \
+	optimistic_transaction_test \
+	write_callback_test \
+	heap_test \
+	compact_on_deletion_collector_test \
+	compaction_job_stats_test \
+	transaction_test \
+	ldb_cmd_test \
+	blkcache_test
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
@@ -847,7 +852,10 @@ hash_table_test: cache/hash_table_test.o db/db_test_util.o  $(LIBOBJECTS) $(TEST
 hash_table_microbench: cache/hash_table_microbench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-microbench_cacheimpl: cache/microbench_cacheimpl.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+ldb: tools/ldb.o $(LIBOBJECTS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
