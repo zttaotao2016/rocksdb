@@ -323,7 +323,8 @@ TESTS = \
 	compact_on_deletion_collector_test \
 	compaction_job_stats_test \
 	transaction_test \
-	ldb_cmd_test
+	ldb_cmd_test \
+	blkcache_test
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
@@ -973,6 +974,9 @@ sst_dump: tools/sst_dump.o $(LIBOBJECTS)
 	$(AM_LINK)
 
 ldb_cmd_test: tools/ldb_cmd_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
