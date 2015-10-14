@@ -288,6 +288,7 @@ TESTS = \
 	sst_dump_test \
 	compact_files_test \
 	perf_context_test
+	blkcache_test
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
@@ -831,6 +832,9 @@ memtable_list_test: db/memtable_list_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 sst_dump: tools/sst_dump.o $(LIBOBJECTS)
+	$(AM_LINK)
+
+blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
