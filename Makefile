@@ -852,7 +852,7 @@ hash_table_test: cache/hash_table_test.o db/db_test_util.o  $(LIBOBJECTS) $(TEST
 hash_table_microbench: cache/hash_table_microbench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
+blkcache_test: blkcache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)

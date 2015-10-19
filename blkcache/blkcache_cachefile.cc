@@ -36,7 +36,7 @@ struct CacheRecord
   }
 
   uint32_t ComputeCRC() const;
-  bool Serialize(std::vector<WriteBuffer*> & bufs, size_t& woff);
+  bool Serialize(std::vector<CacheWriteBuffer*> & bufs, size_t& woff);
   bool Deserialize(const Slice& buf);
 
   static size_t CalcSize(const Slice& key, const Slice& val) {
@@ -45,7 +45,7 @@ struct CacheRecord
 
   static const uint32_t MAGIC = 0xfefa;
 
-  bool Append(std::vector<WriteBuffer*>& bufs, size_t& woff,
+  bool Append(std::vector<CacheWriteBuffer*>& bufs, size_t& woff,
               const char* data, const size_t size);
 
   CacheRecordHeader hdr_;
@@ -67,7 +67,7 @@ uint32_t CacheRecord::ComputeCRC() const
   return crc;
 }
 
-bool CacheRecord::Serialize(std::vector<WriteBuffer*>& bufs, size_t& woff)
+bool CacheRecord::Serialize(std::vector<CacheWriteBuffer*>& bufs, size_t& woff)
 {
   assert(bufs.size());
   return Append(bufs, woff, (char*) &hdr_, sizeof(hdr_))
@@ -75,7 +75,7 @@ bool CacheRecord::Serialize(std::vector<WriteBuffer*>& bufs, size_t& woff)
          && Append(bufs, woff, (char*) val_.data(), val_.size());
 }
 
-bool CacheRecord::Append(std::vector<WriteBuffer*>& bufs, size_t& woff,
+bool CacheRecord::Append(std::vector<CacheWriteBuffer*>& bufs, size_t& woff,
                          const char* data, const size_t data_size) {
   assert(woff < bufs.size());
 
@@ -83,7 +83,7 @@ bool CacheRecord::Append(std::vector<WriteBuffer*>& bufs, size_t& woff,
   size_t size = data_size;
 
   for (size_t i = woff; size && i < bufs.size(); ++i) {
-    WriteBuffer* buf = bufs[i];
+    CacheWriteBuffer* buf = bufs[i];
     const size_t free = buf->Free();
     if (size <= free) {
       buf->Append(p, size);
@@ -208,10 +208,7 @@ bool RandomAccessCacheFile::ParseRec(const LBA& lba, Slice* key, Slice* val,
 
 WriteableCacheFile::~WriteableCacheFile() {
   WriteLock _(&rwlock_);
-  for (auto buf : bufs_) {
-    alloc_.Deallocate(buf);
-  }
-  bufs_.clear();
+  ClearBuffers();
 }
 
 bool WriteableCacheFile::Create() {
@@ -283,7 +280,7 @@ bool WriteableCacheFile::ExpandBuffer(const size_t size) {
   }
 
   while (free < size) {
-    WriteBuffer* const buf = alloc_.Allocate();
+    CacheWriteBuffer* const buf = alloc_.Allocate();
     if (!buf) {
       Debug(log_, "Unable to allocate buffers");
       return false;
@@ -317,7 +314,7 @@ void WriteableCacheFile::DispatchBuffer() {
   }
 }
 
-void WriteableCacheFile::BufferWriteDone(WriteBuffer* const buf) {
+void WriteableCacheFile::BufferWriteDone(CacheWriteBuffer* const buf) {
   WriteLock _(&rwlock_);
 
   assert(bufs_.size());
@@ -395,10 +392,14 @@ void WriteableCacheFile::Close() {
   Info(log_, "Closing file %s. size=%d written=%d", Path().c_str(), size_,
        disk_woff_);
 
+  ClearBuffers();
+  file_.reset();
+}
+
+void WriteableCacheFile::ClearBuffers() {
   for (size_t i = 0; i < bufs_.size(); ++i) {
     alloc_.Deallocate(bufs_[i]);
   }
 
   bufs_.clear();
-  file_.reset();
 }
