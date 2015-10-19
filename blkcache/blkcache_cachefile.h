@@ -1,18 +1,17 @@
 #pragma once
 
-#include <memory>
-#include <list>
-#include <string>
-#include "include/rocksdb/env.h"
-#include "include/rocksdb/comparator.h"
-#include "db/skiplist.h"
-#include "blkcache/persistent_blkcache.h"
 #include "blkcache/blkcache_buffer.h"
+#include "db/skiplist.h"
+#include "include/rocksdb/comparator.h"
+#include "include/rocksdb/env.h"
 #include "port/port_posix.h"
-#include "util/mutexlock.h"
 #include "util/arena.h"
 #include "util/coding.h"
 #include "util/crc32c.h"
+#include "util/mutexlock.h"
+#include <list>
+#include <memory>
+#include <string>
 
 namespace rocksdb {
 
@@ -27,7 +26,7 @@ class Writer {
 
   virtual ~Writer() {}
 
-  virtual void Write(WriteableCacheFile* file, WriteBuffer* buf) = 0;
+  virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) = 0;
   virtual void Stop() = 0;
 };
 
@@ -109,7 +108,7 @@ class RandomAccessCacheFile : public BlockCacheFile {
 class WriteableCacheFile : public RandomAccessCacheFile {
  public:
 
-  WriteableCacheFile(Env* const env, WriteBufferAllocator& alloc,
+  WriteableCacheFile(Env* const env, CacheWriteBufferAllocator& alloc,
                      Writer& writer, const std::string& dir,
                      const uint32_t cache_id, const uint32_t max_size,
                      const std::shared_ptr<Logger> & log)
@@ -151,20 +150,21 @@ class WriteableCacheFile : public RandomAccessCacheFile {
 
   bool ExpandBuffer(const size_t size);
   void DispatchBuffer();
-  void BufferWriteDone(WriteBuffer* buf);
+  void BufferWriteDone(CacheWriteBuffer* buf);
+  void ClearBuffers();
   void Close();
 
-  WriteBufferAllocator& alloc_;
-  Writer& writer_;
-  std::unique_ptr<WritableFile> file_;
-  std::vector<WriteBuffer*> bufs_;
-  uint32_t size_;
-  const uint32_t max_size_;
-  bool eof_;
-  uint32_t disk_woff_;
-  size_t buf_woff_;
-  size_t buf_doff_;
-  bool is_io_pending_;
+  CacheWriteBufferAllocator& alloc_;         // Buffer provider
+  Writer& writer_;                      // File writer thread
+  std::unique_ptr<WritableFile> file_;  // RocksDB Env file abstraction
+  std::vector<CacheWriteBuffer*> bufs_;      // Written buffers
+  uint32_t size_;                       // Size of the file
+  const uint32_t max_size_;             // Max size of the file
+  bool eof_;                            // End of file
+  uint32_t disk_woff_;                  // Offset 
+  size_t buf_woff_;                     // off into bufs_ to write
+  size_t buf_doff_;                     // off into bufs_ to dispatch
+  bool is_io_pending_;                  // Is a write to disk pending ?
 };
 
 } // namespace rocksdb

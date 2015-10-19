@@ -952,7 +952,7 @@ sst_dump: tools/sst_dump.o $(LIBOBJECTS)
 ldb_cmd_test: tools/ldb_cmd_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
+blkcache_test: blkcache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
