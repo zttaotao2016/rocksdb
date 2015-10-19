@@ -104,8 +104,8 @@ LIB_SOURCES =                                                   \
   util/instrumented_mutex.cc                                    \
   util/iostats_context.cc                                       \
   blkcache/blkcache.cc                                          \
-  blkcache/nvm_cache.cc                                         \
   blkcache/blkcache_cachefile.cc                                \
+  blkcache/blkcache_index.cc                                    \
   utilities/backupable/backupable_db.cc                         \
   utilities/convenience/info_log_finder.cc                      \
   utilities/checkpoint/checkpoint.cc                            \

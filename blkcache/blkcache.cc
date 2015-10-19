@@ -5,7 +5,7 @@
 using namespace rocksdb;
 using std::unique_ptr;
 
-Status NVMBlockCache::Open() {
+Status BlockCacheImpl::Open() {
   Status status;
 
   WriteLock _(&lock_);
@@ -41,7 +41,7 @@ Status NVMBlockCache::Open() {
   return Status::OK();
 }
 
-Status NVMBlockCache::Close() {
+Status BlockCacheImpl::Close() {
   WriteLock _(&lock_);
 
   writer_.Stop();
@@ -49,7 +49,7 @@ Status NVMBlockCache::Close() {
   return Status::OK();
 }
 
-Status NVMBlockCache::Insert(const Slice& key, void* buf, const uint16_t size,
+Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint16_t size,
                              LBA* lba) {
   // pre-condition
   assert(buf);
@@ -68,25 +68,25 @@ Status NVMBlockCache::Insert(const Slice& key, void* buf, const uint16_t size,
     NewCacheFile();
   }
 
-  bool ok = block_index_->Insert(key, *lba);
+  bool ok = metadata_.Insert(key, *lba);
   assert(ok);
 
   return Status::OK();
 }
 
-bool NVMBlockCache::Lookup(const Slice& key, unique_ptr<char>* val,
+bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char>* val,
                            uint32_t* size)
 {
   ReadLock _(&lock_);
 
   LBA lba;
-  bool status = block_index_->Lookup(key, &lba);
+  bool status = metadata_.Lookup(key, &lba);
   if (!status) {
     Error(log_, "Error looking up index for key %s", key.ToString().c_str());
     return status;
   }
 
-  BlockCacheFile* const file = cache_file_index_->Lookup(lba.cache_id_);
+  BlockCacheFile* const file = metadata_.Lookup(lba.cache_id_);
   assert(file);
   if (!file) {
     Error(log_, "Error looking up cache file %d", lba.cache_id_);
@@ -112,7 +112,12 @@ bool NVMBlockCache::Lookup(const Slice& key, unique_ptr<char>* val,
   return true;
 }
 
-void NVMBlockCache::NewCacheFile() {
+bool BlockCacheImpl::Erase(const Slice& key) {
+  WriteLock _(&lock_);
+  return metadata_.Remove(key);
+}
+
+void BlockCacheImpl::NewCacheFile() {
   lock_.AssertHeld();
 
   Info(log_, "Creating cache file %d", writerCacheId_);
@@ -125,6 +130,76 @@ void NVMBlockCache::NewCacheFile() {
   assert(cacheFile_->Create());
 
   // insert to cache files tree
-  bool status = cache_file_index_->Insert(cacheFile_);
+  bool status = metadata_.Insert(cacheFile_);
   assert(status);
 }
+
+//
+// RocksBlockCache
+//
+RocksBlockCache::RocksBlockCache(Env* env,
+                                 const std::string path,
+                                 const std::shared_ptr<Logger>& log)
+  : log_(log) {
+  BlockCacheImpl::Options opt;
+
+  opt.info_log = log;
+  opt.path = path;
+
+  cache_.reset(new BlockCacheImpl(env, opt));
+  assert(cache_->Open().ok());
+}
+
+RocksBlockCache::~RocksBlockCache() {
+  cache_->Close();
+}
+
+Cache::Handle* RocksBlockCache::Insert(const Slice& key, void* value,
+                                const size_t size,
+                                void (*deleter)(const Slice&, void*)) {
+  assert(cache_);
+  // assert(!deleter);
+
+  LBA lba;
+  if (!cache_->Insert(key, value, size, &lba).ok()) {
+    Error(log_, "Error inserting to cache. key=%s", key.ToString().c_str());
+    return nullptr;
+  }
+
+  auto* ret = new BlkCacheHandle();
+  ret->Assign(key, (char*) value, size);
+
+  return ret;
+}
+
+Cache::Handle* RocksBlockCache::Lookup(const Slice& key) {
+  assert(cache_);
+
+  unique_ptr<char> data;
+  uint32_t size;
+  if (!cache_->Lookup(key, &data, &size)) {
+    Error(log_, "Error looking up key %s", key.ToString().c_str());
+    return nullptr;
+  }
+
+  auto* ret = new BlkCacheHandle();
+  ret->Copy(key, data.get(), size);
+
+  data.release();
+
+  return ret;
+}
+
+void RocksBlockCache::Release(Cache::Handle* handle) {
+  assert(handle);
+  delete (BlkCacheHandle*) handle;
+}
+
+void* RocksBlockCache::Value(Cache::Handle* handle) {
+  assert(handle);
+  return ((BlkCacheHandle*) handle)->data_;
+}
+
+
+ 
+

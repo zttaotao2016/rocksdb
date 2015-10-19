@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <memory>
+#include "include/rocksdb/status.h"
 
 namespace rocksdb {
 
@@ -34,7 +35,8 @@ class PersistentBlockCache {
   virtual bool Lookup(const Slice & key, std::unique_ptr<char>* val,
                       uint32_t* size) = 0;
 
-  // virtual uint64_t GetCapacity() = 0;
+  virtual bool Erase(const Slice& key) = 0;
 };
+
 
 }  // namespace rocksdb

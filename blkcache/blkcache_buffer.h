@@ -1,4 +1,12 @@
+// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file. See the AUTHORS file for names of contributors.
+
 #pragma once
+
+#include <list>
+#include <memory>
+#include <string>
 
 #include "blkcache/persistent_blkcache.h"
 #include "db/skiplist.h"
@@ -9,55 +17,42 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 #include "util/mutexlock.h"
-#include <list>
-#include <memory>
-#include <string>
 
 namespace rocksdb {
 
 /**
  *
  */
-class WriteBuffer {
+class CacheWriteBuffer {
  public:
-
-  WriteBuffer(const size_t size)
-    : size_(size) {
+  explicit CacheWriteBuffer(const size_t size)
+    : size_(size),
+      pos_(0) {
     buf_.reset(new char[size_]);
-
-    Reset();
 
     assert(!pos_);
     assert(size_);
   }
 
-  virtual ~WriteBuffer() {}
+  virtual ~CacheWriteBuffer() {}
 
   int Append(const char* buf, const size_t size) {
-    const size_t ret = pos_;
-
     assert(pos_ + size <= size_);
 
+    const size_t ret = pos_;
     memcpy(buf_.get() + pos_, buf, size);
     pos_ += size;
-
     assert(pos_ <= size_);
-
     return ret;
   }
 
-  void Reset() {
-    memset(buf_.get(), 'x', size_);
-    pos_ = 0;
-  }
-
+  void Reset() { pos_ = 0; }
   size_t Free() const { return size_ - pos_; }
   size_t Capacity() const { return size_; }
   size_t Used() const { return pos_; }
   char* Data() const { return buf_.get(); }
 
  private:
-
   std::unique_ptr<char> buf_;
   const size_t size_;
   size_t pos_;
@@ -66,10 +61,17 @@ class WriteBuffer {
 /**
  *
  */
-class WriteBufferAllocator {
+class CacheWriteBufferAllocator {
  public:
+  CacheWriteBufferAllocator()
+    : auto_expand_(true),
+      buffer_count_(0) {
+  }
 
-  WriteBufferAllocator() : bufferCount_(0) {}
+  virtual ~CacheWriteBufferAllocator() {
+    MutexLock _(&lock_);
+    assert(bufs_.size() * buffer_size_ == Capacity());
+  }
 
   void Init(const size_t bufferSize, const size_t bufferCount,
             const size_t max_size) {
@@ -77,24 +79,19 @@ class WriteBufferAllocator {
 
     MutexLock _(&lock_);
 
-    max_size_ = max_size;
-    bufferSize_ = bufferSize;
-    bufferCount_ = bufferCount;
+    target_size_ = max_size;
+    buffer_size_ = bufferSize;
+    buffer_count_ = bufferCount;
 
-    for (size_t i = 0; i < bufferCount_; i++) {
-      auto* buf = new WriteBuffer(bufferSize_);
+    for (size_t i = 0; i < buffer_count_; i++) {
+      auto* buf = new CacheWriteBuffer(buffer_size_);
       if (buf) {
         bufs_.push_back(buf);
       }
     }
   }
 
-  virtual ~WriteBufferAllocator() {
-    MutexLock _(&lock_);
-    assert(bufs_.size() * bufferSize_ == Capacity());
-  }
-
-  WriteBuffer* Allocate() {
+  CacheWriteBuffer* Allocate() {
     MutexLock _(&lock_);
 
     if (bufs_.empty()) {
@@ -105,13 +102,13 @@ class WriteBufferAllocator {
 
     assert(!bufs_.empty());
 
-    WriteBuffer* const buf = bufs_.front();
+    CacheWriteBuffer* const buf = bufs_.front();
     bufs_.pop_front();
 
     return buf;
   }
 
-  void Deallocate(WriteBuffer* const buf) {
+  void Deallocate(CacheWriteBuffer* const buf) {
     assert(buf);
 
     MutexLock _(&lock_);
@@ -119,23 +116,25 @@ class WriteBufferAllocator {
     buf->Reset();
 
     bufs_.push_back(buf);
+
+    AdjustCapacity();
   }
 
-  size_t Capacity() const { return bufferCount_ * bufferSize_; }
-  size_t Free() const { return bufs_.size() * bufferSize_; }
-  size_t buffersize() const { return bufferSize_; }
+  size_t Capacity() const { return buffer_count_ * buffer_size_; }
+  size_t Free() const { return bufs_.size() * buffer_size_; }
+  size_t buffersize() const { return buffer_size_; }
 
  private:
   bool ExpandBuffer() {
     lock_.AssertHeld();
 
-    if (Capacity() >= max_size_) {
+    if (!auto_expand_ && Capacity() >= target_size_) {
       return false;
     }
 
-    assert(Capacity() <= max_size_);
+    assert(auto_expand_ || Capacity() < target_size_);
 
-    auto* const buf = new WriteBuffer(bufferSize_);
+    auto* const buf = new CacheWriteBuffer(buffer_size_);
     if (!buf) {
       return false;
     }
@@ -143,15 +142,31 @@ class WriteBufferAllocator {
     buf->Reset();
     bufs_.push_back(buf);
 
-    bufferCount_++;
+    buffer_count_++;
 
     return true;
   }
 
-  port::Mutex lock_;
-  size_t bufferSize_;
-  size_t bufferCount_;
-  size_t max_size_;
-  std::list<WriteBuffer*> bufs_;
+  void AdjustCapacity() {
+    lock_.AssertHeld();
+
+    while (Free() > target_size_) {
+      auto* buf = bufs_.front();
+      bufs_.pop_front();
+      delete buf;
+      --buffer_count_;
+    }
+
+    assert(Free() <= Capacity());
+    assert(Capacity() <= target_size_);
+  }
+
+  port::Mutex lock_;                    // Sync lock
+  const bool auto_expand_;              // Should act like buffer pool ?
+  size_t buffer_size_;                  // Size of each buffer
+  size_t buffer_count_;                  // Buffer count
+  size_t target_size_;                  // Ideal operational size
+  std::list<CacheWriteBuffer*> bufs_;   // Buffer stash
 };
-}
+
+}  // namespace rocksdb

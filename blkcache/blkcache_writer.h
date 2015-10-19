@@ -2,7 +2,6 @@
 
 #include <memory>
 #include "include/rocksdb/env.h"
-#include "blkcache/blkcache_cachefile.h"
 
 namespace rocksdb {
 
@@ -14,12 +13,12 @@ class IOQueue {
  public:
 
   struct IO {
-    IO(WriteableCacheFile* const file, WriteBuffer* const buf)
+    IO(WriteableCacheFile* const file, CacheWriteBuffer* const buf)
         : file_(file), buf_(buf)
     {}
 
     WriteableCacheFile* file_;
-    WriteBuffer* buf_;
+    CacheWriteBuffer* buf_;
   };
 
   virtual ~IOQueue() {}
@@ -74,26 +73,31 @@ class ThreadedWriter : public Writer {
   ThreadedWriter(Env* const env, const size_t qdepth = 1)
       : env_(env),
         qdepth_(qdepth),
-        q_(new BlockingIOQueue()) {
+        q_(new BlockingIOQueue()),
+        cond_exit_(&th_lock_),
+        nthreads_(0) {
+    MutexLock _(&th_lock_);
     for (size_t i = 0; i < qdepth_; ++i) {
+      ++nthreads_;
       env_->StartThread(&ThreadedWriter::IOMain, this);
     }
   }
 
-  virtual ~ThreadedWriter()
-  {
+  virtual ~ThreadedWriter() {
   }
 
-  void Stop() override
-  {
+  void Stop() override {
+    MutexLock _(&th_lock_);
     for (size_t i = 0; i < qdepth_; ++i) {
       q_->Push(new IOQueue::IO(nullptr, nullptr));
     }
 
-    env_->WaitForJoin();
+    while (nthreads_) {
+      cond_exit_.Wait();
+    }
   }
 
-  void Write(WriteableCacheFile* file, WriteBuffer* buf) override {
+  void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) override {
     q_->Push(new IOQueue::IO(file, buf));
   }
 
@@ -101,7 +105,6 @@ class ThreadedWriter : public Writer {
 
   static void IOMain(void* arg) {
     auto* self = (ThreadedWriter*) arg;
-
     while (true) {
       unique_ptr<IOQueue::IO> io(self->q_->Pop());
 
@@ -111,7 +114,7 @@ class ThreadedWriter : public Writer {
       }
 
       WriteableCacheFile* const f = io->file_;
-      WriteBuffer* const buf = io->buf_;
+      CacheWriteBuffer* const buf = io->buf_;
 
       Status s = f->file_->Append(Slice(buf->Data(), buf->Used()));
       if (!s.ok()) {
@@ -122,11 +125,18 @@ class ThreadedWriter : public Writer {
       assert(s.ok());
       f->BufferWriteDone(buf);
     }
+
+    MutexLock _(&self->th_lock_);
+    --self->nthreads_;
+    self->cond_exit_.Signal();
   }
 
   Env* env_;
   const size_t qdepth_;
   unique_ptr<IOQueue> q_;
+  port::Mutex th_lock_;
+  port::CondVar cond_exit_;
+  size_t nthreads_;
 };
 
 }  // namespace rocksdb
