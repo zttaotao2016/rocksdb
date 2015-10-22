@@ -64,7 +64,7 @@ class CacheWriteBuffer {
 class CacheWriteBufferAllocator {
  public:
   CacheWriteBufferAllocator()
-    : auto_expand_(true),
+    : auto_expand_(false),
       buffer_count_(0) {
   }
 
@@ -158,7 +158,7 @@ class CacheWriteBufferAllocator {
     }
 
     assert(Free() <= Capacity());
-    assert(Capacity() <= target_size_);
+    assert(Free() <= target_size_);
   }
 
   port::Mutex lock_;                    // Sync lock
