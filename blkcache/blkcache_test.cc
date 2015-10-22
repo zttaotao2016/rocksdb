@@ -21,7 +21,7 @@ namespace rocksdb {
 class ConsoleLogger : public Logger {
  public:
   using Logger::Logv;
-  ConsoleLogger() : Logger(InfoLogLevel::DEBUG_LEVEL) {}
+  ConsoleLogger() : Logger(InfoLogLevel::ERROR_LEVEL) {}
 
   void Logv(const char* format, va_list ap) override {
     MutexLock _(&lock_);
@@ -71,41 +71,109 @@ class BlockCacheImplTest : public testing::Test {
     log_->Flush();
   }
 
+  void Insert(const size_t nthreads, const size_t max_keys) {
+    key_ = 0;
+    max_keys_ = max_keys;
+
+    for (size_t i = 0; i < nthreads; i++) {
+      env_->StartThread(&BlockCacheImplTest::InsertMain, this);
+    }
+
+    while (key_ < max_keys_) {
+      sleep(1);
+    }
+  }
+
+  void Verify(const size_t nthreads) {
+    key_ = 0;
+
+    for (size_t i = 0; i < nthreads; i++) {
+      env_->StartThread(&BlockCacheImplTest::VerifyMain, this);
+    }
+
+    while (key_ < max_keys_) {
+      sleep(1);
+    }
+  }
+
  protected:
+
+  void Verify() {
+    const string prefix = "key_prefix_";
+    while (true) {
+      size_t i = key_++;
+      if (i > max_keys_) {
+        break;
+      }
+
+      char edata[4 * 1024];
+      memset(edata, '0' + (i % 10), sizeof(edata));
+      auto k = prefix + std::to_string(i);
+      Slice key(k);
+      unique_ptr<char> block;
+      uint32_t block_size;
+      ASSERT_TRUE(cache_->Lookup(key, &block, &block_size));
+      ASSERT_TRUE(block_size == sizeof(edata));
+      ASSERT_TRUE(memcmp(edata, block.get(), sizeof(edata)) == 0);
+    }
+  }
+
+  void Insert() {
+    BlockCacheImpl::LBA lba;
+    const string prefix = "key_prefix_";
+
+    while (true) {
+      size_t i = key_++;
+      if (i > max_keys_) {
+        break;
+      }
+
+      char data[4 * 1024];
+      memset(data, '0' + (i % 10), sizeof(data));
+      auto k = prefix + std::to_string(i);
+      Slice key(k);
+      while(!cache_->Insert(key, data, sizeof(data), &lba).ok());
+    }
+  }
+
+  static void InsertMain(void* arg) {
+    BlockCacheImplTest* self = (BlockCacheImplTest*) arg;
+    self->Insert();
+  }
+
+  static void VerifyMain(void* arg) {
+    BlockCacheImplTest* self = (BlockCacheImplTest*) arg;
+    self->Verify();
+  }
 
   std::unique_ptr<BlockCacheImpl> cache_;
   Arena arena_;
   Env* env_;
   const std::string path_;
   shared_ptr<Logger> log_;
+
+  atomic<size_t> key_;
+  size_t max_keys_;
 };
 
 TEST_F(BlockCacheImplTest, Insert) {
-  const string prefix = "key_prefix_";
-
-  BlockCacheImpl::LBA lba;
-
   const size_t max_keys = 10 * 1024;
+  Insert(/*nthreads=*/ 1, max_keys);
+  Verify(/*nthreads=*/ 1);
+  Verify(/*nthreads=*/ 5);
+}
 
-  for (size_t i = 0; i < max_keys; i++) {
-    static char data[4 * 1024];
-    memset(data, '0' + (i % 10), sizeof(data));
-    auto k = prefix + std::to_string(i);
-    Slice key(k);
-    while(!cache_->Insert(key, data, sizeof(data), &lba).ok());
-  }
+TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
+  const size_t max_keys = 5 * 10 * 1024;
+  Insert(/*nthreads=*/ 5, max_keys);
+  Verify(/*nthreads=*/ 1);
+  Verify(/*nthreads=*/ 5);
+}
 
-  for (size_t i = 0; i <  max_keys; i++) {
-    static char edata[4 * 1024];
-    memset(edata, '0' + (i % 10), sizeof(edata));
-    auto k = prefix + std::to_string(i);
-    Slice key(k);
-    unique_ptr<char> block;
-    uint32_t block_size;
-    ASSERT_TRUE(cache_->Lookup(key, &block, &block_size));
-    ASSERT_TRUE(block_size == sizeof(edata));
-    ASSERT_TRUE(memcmp(edata, block.get(), sizeof(edata)) == 0);
-  }
+TEST_F(BlockCacheImplTest, Insert1M) {
+  const size_t max_keys = 1024 * 1024;
+  Insert(/*nthreads=*/ 10, max_keys);
+  Verify(/*nthreads=*/ 10);
 }
 
 class BlkcacheDBTest : public DBTestBase {
@@ -114,8 +182,7 @@ class BlkcacheDBTest : public DBTestBase {
 
   shared_ptr<Cache> NewBlkCache() {
     return shared_ptr<Cache>(
-      new RocksBlockCache(Env::Default(),  test::TmpDir(env_) + "/blkcache",
-                          shared_ptr<Logger>(new ConsoleLogger())));
+      new RocksBlockCache(Env::Default(),  test::TmpDir(env_) + "/blkcache"));
   }
 };
 

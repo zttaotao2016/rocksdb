@@ -68,7 +68,9 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint16_t size,
     NewCacheFile();
   }
 
-  bool ok = metadata_.Insert(key, *lba);
+  BlockInfo* info = new BlockInfo(key, *lba);
+  cacheFile_->Add(info);
+  bool ok = metadata_.Insert(info);
   assert(ok);
 
   return Status::OK();
@@ -114,7 +116,10 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char>* val,
 
 bool BlockCacheImpl::Erase(const Slice& key) {
   WriteLock _(&lock_);
-  return metadata_.Remove(key);
+  BlockInfo* info = metadata_.Remove(key);
+  assert(info);
+  delete info;
+  return true;
 }
 
 void BlockCacheImpl::NewCacheFile() {
@@ -138,12 +143,10 @@ void BlockCacheImpl::NewCacheFile() {
 // RocksBlockCache
 //
 RocksBlockCache::RocksBlockCache(Env* env,
-                                 const std::string path,
-                                 const std::shared_ptr<Logger>& log)
-  : log_(log) {
+                                 const std::string path) {
   BlockCacheImpl::Options opt;
 
-  opt.info_log = log;
+  env->NewLogger(path + "/cache.log", &opt.info_log);
   opt.path = path;
 
   cache_.reset(new BlockCacheImpl(env, opt));

@@ -1,6 +1,11 @@
 #pragma once
 
+#include <list>
+#include <memory>
+#include <string>
+
 #include "blkcache/blkcache_buffer.h"
+#include "blkcache/blkcache_lrulist.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"
@@ -9,17 +14,23 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 #include "util/mutexlock.h"
-#include <list>
-#include <memory>
-#include <string>
 
 namespace rocksdb {
 
 class WriteableCacheFile;
+class BlockInfo;
 
 /**
- *
- *
+ * BlockCacheFile
+ *       ^
+ *       |
+ *       |
+ * RandomAccessCacheFile (Can be used only for reading)
+ *       ^
+ *       |
+ *       |
+ * WriteableCacheFile ---* Writer (Used to pipeline writes to media)
+ * (caches writes until flushed)
  */
 class Writer {
  public:
@@ -34,7 +45,7 @@ class Writer {
  * class BlockCacheFile
  *
  */
-class BlockCacheFile
+class BlockCacheFile : public LRUElement<BlockCacheFile>
 {
  public:
 
@@ -57,11 +68,16 @@ class BlockCacheFile
 
   uint32_t cacheid() const { return cache_id_; }
 
+  virtual void Add(BlockInfo* binfo) = 0;
+
+  std::list<BlockInfo*>& block_infos() { return block_infos_; }
+
  protected:
 
   Env* const env_;
   const std::string dir_;
   const uint32_t cache_id_;
+  std::list<BlockInfo*> block_infos_;
 };
 
 /**
@@ -86,6 +102,11 @@ class RandomAccessCacheFile : public BlockCacheFile {
   bool Append(const Slice&, const Slice&, LBA*) override {
     assert(!"Not implemented");
     return false;
+  }
+
+  void Add(BlockInfo* binfo) override {
+    WriteLock _(&rwlock_);
+    block_infos_.push_back(binfo);
   }
 
  private:
@@ -154,10 +175,10 @@ class WriteableCacheFile : public RandomAccessCacheFile {
   void ClearBuffers();
   void Close();
 
-  CacheWriteBufferAllocator& alloc_;         // Buffer provider
+  CacheWriteBufferAllocator& alloc_;    // Buffer provider
   Writer& writer_;                      // File writer thread
   std::unique_ptr<WritableFile> file_;  // RocksDB Env file abstraction
-  std::vector<CacheWriteBuffer*> bufs_;      // Written buffers
+  std::vector<CacheWriteBuffer*> bufs_; // Written buffers
   uint32_t size_;                       // Size of the file
   const uint32_t max_size_;             // Max size of the file
   bool eof_;                            // End of file

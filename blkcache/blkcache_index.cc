@@ -2,32 +2,28 @@
 
 using namespace rocksdb;
 
-bool SimpleBlockLookupIndex::Insert(const Slice& key, const LBA& lba) {
-  WriteLock _(&rwlock_);
-  auto status = index_.insert(std::make_pair(key, lba));
-  assert(status.second);
-  return status.second;
-}
-
-bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {
-  ReadLock _(&rwlock_);
-
-  auto it = index_.find(key);
-  if (it == index_.end()) {
-    return false;
-  }
-
-  assert(key == it->first);
-  *lba = it->second;
-
+bool SimpleBlockLookupIndex::Insert(BlockInfo* binfo) {
+  index_.Insert(binfo);
   return true;
 }
 
-bool SimpleBlockLookupIndex::Remove(const Slice& key) {
-  WriteLock _(&rwlock_);
-  const size_t count = index_.erase(key);
-  assert(count <= 1);
-  return count;
+bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {
+  BlockInfo n(key);
+  ReadLock _(index_.GetMutex(&n));
+  auto* ret = index_.Find(&n);
+  if (!ret) {
+    return false;
+  }
+
+  *lba = ret->lba_;
+  return true;
+}
+
+BlockInfo* SimpleBlockLookupIndex::Remove(const Slice& key) {
+  BlockInfo n(key);
+  BlockInfo* ret = index_.Erase(&n);
+  assert(ret);
+  return ret;
 }
 
 
