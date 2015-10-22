@@ -33,6 +33,7 @@ class BlockCacheImpl : public PersistentBlockCache {
     uint32_t max_bufferpool_size_ = writeBufferSize * writeBufferCount;
     uint32_t maxCacheFileSize = 2 * 1024 * 1024;
     uint32_t writer_qdepth_ = 2;
+    uint32_t max_size_ = maxCacheFileSize * 100;
   };
 
   BlockCacheImpl(Env* env, const Options& opt)
@@ -119,8 +120,7 @@ class RocksBlockCache : public Cache {
     size_t size_;
   };
 
-  RocksBlockCache(Env* env, const std::string path,
-                  const std::shared_ptr<Logger>& log);
+  RocksBlockCache(Env* env, const std::string path);
   virtual ~RocksBlockCache();
 
   Handle* Insert(const Slice& key, void* value, size_t charge,
