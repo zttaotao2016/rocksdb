@@ -7,6 +7,18 @@ using namespace rocksdb;
 using std::unique_ptr;
 
 //
+// BlockCacheFile
+//
+Status BlockCacheFile::Delete(size_t* size) {
+  Status status = env_->GetFileSize(Path(), size);
+  if (!status.ok()) {
+    return status;
+  }
+
+  return env_->DeleteFile(Path());
+}
+
+//
 // CacheRecord
 //
 
@@ -161,6 +173,7 @@ bool RandomAccessCacheFile::OpenImpl() {
     return false;
   }
 
+  evictable_ = true;
   return true;
 }
 
@@ -279,6 +292,7 @@ bool WriteableCacheFile::ExpandBuffer(const size_t size) {
     }
   }
 
+  assert(free < size);
   while (free < size) {
     CacheWriteBuffer* const buf = alloc_.Allocate();
     if (!buf) {
@@ -287,22 +301,27 @@ bool WriteableCacheFile::ExpandBuffer(const size_t size) {
     }
 
     size_ += buf->Free();
-    bufs_.push_back(buf);
-
     free += buf->Free();
+    bufs_.push_back(buf);
   }
 
   assert(free >= size);
-
   return true;
 }
 
 void WriteableCacheFile::DispatchBuffer() {
   rwlock_.AssertHeld();
   if (is_io_pending_ || bufs_.empty()) {
+    // IO is in progress or there is nothing to write
     return;
   }
 
+  if (!eof_ && buf_doff_ == buf_woff_) {
+    // dispatch buffer is pointing to write buffer and we haven't hit eof
+    return;
+  }
+
+  assert(eof_ || buf_doff_ < buf_woff_);
   assert(buf_doff_ < bufs_.size());
   assert(!is_io_pending_);
   assert(file_);

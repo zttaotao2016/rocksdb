@@ -36,6 +36,8 @@ class PersistentBlockCache {
                       uint32_t* size) = 0;
 
   virtual bool Erase(const Slice& key) = 0;
+
+  virtual bool Reserve(const size_t size) = 0;
 };
 
 
