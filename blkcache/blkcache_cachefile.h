@@ -6,6 +6,7 @@
 
 #include "blkcache/blkcache_buffer.h"
 #include "blkcache/blkcache_lrulist.h"
+#include "blkcache/persistent_blkcache.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"
@@ -35,10 +36,15 @@ class BlockInfo;
 class Writer {
  public:
 
+  Writer(PersistentBlockCache* const cache)
+    : cache_(cache) {
+  }
   virtual ~Writer() {}
 
   virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) = 0;
   virtual void Stop() = 0;
+
+  PersistentBlockCache* const cache_;
 };
 
 /**
@@ -48,13 +54,13 @@ class Writer {
 class BlockCacheFile : public LRUElement<BlockCacheFile>
 {
  public:
-
   BlockCacheFile(Env* const env, const std::string& dir,
                  const uint32_t cache_id)
-    : env_(env),
+    : LRUElement<BlockCacheFile>(/*evictable=*/ false),
+      env_(env),
       dir_(dir),
-      cache_id_(cache_id)
-  {}
+      cache_id_(cache_id) {
+  }
 
   virtual ~BlockCacheFile() {}
 
@@ -71,6 +77,8 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
   virtual void Add(BlockInfo* binfo) = 0;
 
   std::list<BlockInfo*>& block_infos() { return block_infos_; }
+
+  virtual Status Delete(size_t* size);
 
  protected:
 
@@ -90,8 +98,7 @@ class RandomAccessCacheFile : public BlockCacheFile {
   RandomAccessCacheFile(Env* const env, const std::string& dir,
                         const uint32_t cache_id, const shared_ptr<Logger>& log)
     : BlockCacheFile(env, dir, cache_id),
-      log_(log)
-  {}
+      log_(log) {}
 
   virtual ~RandomAccessCacheFile() {}
 

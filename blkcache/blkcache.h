@@ -33,7 +33,7 @@ class BlockCacheImpl : public PersistentBlockCache {
     uint32_t max_bufferpool_size_ = writeBufferSize * writeBufferCount;
     uint32_t maxCacheFileSize = 2 * 1024 * 1024;
     uint32_t writer_qdepth_ = 2;
-    uint32_t max_size_ = maxCacheFileSize * 100;
+    uint64_t max_size_ = UINT64_MAX;
   };
 
   BlockCacheImpl(Env* env, const Options& opt)
@@ -41,8 +41,9 @@ class BlockCacheImpl : public PersistentBlockCache {
         opt_(opt),
         writerCacheId_(0),
         cacheFile_(nullptr),
-        writer_(env_, opt_.writer_qdepth_),
-        log_(opt.info_log) {
+        writer_(this, env_, opt_.writer_qdepth_),
+        log_(opt.info_log),
+        size_(0) {
     Info(log_, "Initializing allocator. size=%d B count=%d limit=%d B",
          opt_.writeBufferSize, opt_.writeBufferCount,
          opt_.max_bufferpool_size_);
@@ -60,6 +61,7 @@ class BlockCacheImpl : public PersistentBlockCache {
   bool Lookup(const Slice & key, std::unique_ptr<char>* data,
               uint32_t* size) override;
   bool Erase(const Slice& key) override;
+  bool Reserve(const size_t size) override;
 
  private:
   void NewCacheFile();
@@ -75,6 +77,7 @@ class BlockCacheImpl : public PersistentBlockCache {
   ThreadedWriter writer_;
   SimpleBlockCacheMetadata metadata_;
   std::shared_ptr<Logger> log_;
+  size_t size_;
 };
 
 class RocksBlockCache : public Cache {

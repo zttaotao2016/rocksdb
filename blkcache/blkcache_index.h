@@ -16,12 +16,14 @@ namespace rocksdb {
  */
 class CacheFileIndex {
  public:
-
   virtual ~CacheFileIndex() {}
 
   virtual bool Insert(BlockCacheFile* const file) = 0;
   virtual BlockCacheFile* Lookup(const uint32_t cache_id) = 0;
-  virtual BlockCacheFile* Evict() = 0;
+  virtual BlockCacheFile* PopEvictableCandidate() = 0;
+
+ protected:
+  virtual void RemoveFile(const uint32_t cache_id) = 0;
   virtual void Clear() = 0;
 };
 
@@ -31,7 +33,6 @@ class CacheFileIndex {
 class SimpleCacheFileIndex : public CacheFileIndex
 {
  public:
-
   virtual ~SimpleCacheFileIndex() {
     Clear();
   }
@@ -57,19 +58,6 @@ class SimpleCacheFileIndex : public CacheFileIndex
     return it->second;
   }
 
-  BlockCacheFile* Evict() override {
-    WriteLock _(&rwlock_);
-    if (lru_.IsEmpty()) {
-      return nullptr;
-    }
-
-    BlockCacheFile* f = lru_.Pop();
-    auto it = index_.find(f->cacheid());
-    assert(it != index_.end());
-    assert(it->second == f);
-    return f;
-  }
-
   void Clear()
   {
     WriteLock _(&rwlock_);
@@ -80,6 +68,24 @@ class SimpleCacheFileIndex : public CacheFileIndex
 
     index_.clear();
     assert(lru_.IsEmpty());
+  }
+
+  BlockCacheFile* PopEvictableCandidate() override {
+    WriteLock _(&rwlock_);
+    if (lru_.IsEmpty()) {
+      return nullptr;
+    }
+
+    BlockCacheFile* f = lru_.Pop();
+    assert(!f || f->evictable_);
+    return f;
+  }
+
+ protected:
+
+  void RemoveFile(const uint32_t cache_id) override {
+    size_t size = index_.erase(cache_id);
+    assert(size == 1);
   }
 
  private:
@@ -123,12 +129,14 @@ struct BlockInfo {
  */
 class BlockLookupIndex {
  public:
-
   virtual ~BlockLookupIndex() {}
 
   virtual bool Insert(BlockInfo* binfo) = 0;
   virtual bool Lookup(const Slice& key, LBA* lba) = 0;
   virtual BlockInfo* Remove(const Slice& key) = 0;
+
+ protected:
+  virtual void RemoveAllKeys(BlockCacheFile* file) = 0;
 };
 
 /**
@@ -136,12 +144,14 @@ class BlockLookupIndex {
  */
 class SimpleBlockLookupIndex : public BlockLookupIndex {
  public:
-
   virtual ~SimpleBlockLookupIndex() {}
 
   bool Insert(BlockInfo* binfo) override;
   bool Lookup(const Slice& key, LBA* lba) override;
   BlockInfo* Remove(const Slice& key) override;
+
+ protected:
+  void RemoveAllKeys(BlockCacheFile* f) override;
 
  private:
 
@@ -173,6 +183,17 @@ class SimpleBlockCacheMetadata : public SimpleBlockLookupIndex,
  public:
 
   virtual ~SimpleBlockCacheMetadata() {}
+
+  virtual BlockCacheFile* Evict() {
+    BlockCacheFile* f = SimpleCacheFileIndex::PopEvictableCandidate();
+    if (!f) {
+      return nullptr;
+    }
+
+    SimpleBlockLookupIndex::RemoveAllKeys(f);
+    SimpleCacheFileIndex::RemoveFile(f->cacheid());
+    return f;
+  }
 
   using SimpleCacheFileIndex::Insert;
   using SimpleCacheFileIndex::Lookup;

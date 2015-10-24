@@ -26,4 +26,9 @@ BlockInfo* SimpleBlockLookupIndex::Remove(const Slice& key) {
   return ret;
 }
 
-
+void SimpleBlockLookupIndex::RemoveAllKeys(BlockCacheFile* f) {
+  for (BlockInfo* binfo : f->block_infos()) {
+    bool status = index_.Erase(binfo);
+    assert(status);
+  }
+}

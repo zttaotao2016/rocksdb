@@ -38,25 +38,33 @@ class BlockCacheImplTest : public testing::Test {
   BlockCacheImplTest()
       : env_(Env::Default()),
         path_(test::TmpDir(env_) + "/nvm_block_cache_test") {
+    Create();
+  }
 
+  void Create(const uint32_t max_file_size = 12 * 1024 * 1024,
+              const uint64_t max_size = UINT64_MAX) {
     Status s;
-
     BlockCacheImpl::Options opt;
 
     opt.writeBufferSize = 1 * 1024 * 1024;
     opt.writeBufferCount = 100;
-    opt.maxCacheFileSize =  12 * 1024* 1024;
+    opt.maxCacheFileSize =  max_file_size;
     opt.max_bufferpool_size_ = opt.writeBufferSize * opt.writeBufferCount;
+    opt.max_size_ = max_size;
 
     opt.path = path_;
-    auto logfile = path_ + "/nvm_block_cache_test.log";
-    log_.reset(new ConsoleLogger());
-    // s = env_->NewLogger(logfile, &log_);
+    auto logfile = path_ + "/test.log";
+    // log_.reset(new ConsoleLogger());
+    env_->NewLogger(logfile, &log_);
     opt.info_log = log_;
     assert(s.ok());
 
     Log(InfoLogLevel::INFO_LEVEL, log_, "Test output directory %s",
         opt.path.c_str());
+
+    if (cache_) {
+      cache_->Close();
+    }
 
     cache_.reset(new BlockCacheImpl(env_, opt));
 
@@ -84,7 +92,7 @@ class BlockCacheImplTest : public testing::Test {
     }
   }
 
-  void Verify(const size_t nthreads) {
+  void ThreadedVerify(const size_t nthreads) {
     key_ = 0;
 
     for (size_t i = 0; i < nthreads; i++) {
@@ -98,7 +106,31 @@ class BlockCacheImplTest : public testing::Test {
 
  protected:
 
-  void Verify() {
+  std::string PaddedNumber(const size_t data, const size_t pad_size) {
+    assert(pad_size);
+
+    char ret[pad_size];
+    int pos = pad_size - 1;
+    size_t count = 0;
+    size_t t = data;
+
+    while (t) {
+      count++;
+      ret[pos--] = '0' + t % 10;
+      t = t / 10;
+    }
+
+    while (pos >= 0) {
+      ret[pos--] = '0';
+    }
+
+    assert(count <= pad_size);
+    assert(pos == -1);
+
+    return std::string(ret, pad_size);
+  }
+
+  void Verify(const bool relaxed = false) {
     const string prefix = "key_prefix_";
     while (true) {
       size_t i = key_++;
@@ -108,10 +140,13 @@ class BlockCacheImplTest : public testing::Test {
 
       char edata[4 * 1024];
       memset(edata, '0' + (i % 10), sizeof(edata));
-      auto k = prefix + std::to_string(i);
+      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
       unique_ptr<char> block;
       uint32_t block_size;
+      if (relaxed && !cache_->Lookup(key, &block, &block_size)) {
+        continue;
+      }
       ASSERT_TRUE(cache_->Lookup(key, &block, &block_size));
       ASSERT_TRUE(block_size == sizeof(edata));
       ASSERT_TRUE(memcmp(edata, block.get(), sizeof(edata)) == 0);
@@ -130,9 +165,11 @@ class BlockCacheImplTest : public testing::Test {
 
       char data[4 * 1024];
       memset(data, '0' + (i % 10), sizeof(data));
-      auto k = prefix + std::to_string(i);
+      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
-      while(!cache_->Insert(key, data, sizeof(data), &lba).ok());
+      while(!cache_->Insert(key, data, sizeof(data), &lba).ok()) {
+        sleep(1);
+      }
     }
   }
 
@@ -159,21 +196,37 @@ class BlockCacheImplTest : public testing::Test {
 TEST_F(BlockCacheImplTest, Insert) {
   const size_t max_keys = 10 * 1024;
   Insert(/*nthreads=*/ 1, max_keys);
-  Verify(/*nthreads=*/ 1);
-  Verify(/*nthreads=*/ 5);
+  Verify();
+  ThreadedVerify(/*nthreads=*/ 5);
+}
+
+TEST_F(BlockCacheImplTest, InsertWithEviction) {
+  Create(/*max_file_size=*/ 12 * 1024 * 1024,
+         /*max_size=*/ 200 * 1024 * 1024);
+  const size_t max_keys = 100 * 1024;
+  Insert(/*nthreads=*/ 1, max_keys);
+  Verify(/*relaxed=*/ true);
 }
 
 TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
   const size_t max_keys = 5 * 10 * 1024;
   Insert(/*nthreads=*/ 5, max_keys);
-  Verify(/*nthreads=*/ 1);
-  Verify(/*nthreads=*/ 5);
+  Verify();
+  ThreadedVerify(/*nthreads=*/ 5);
 }
 
 TEST_F(BlockCacheImplTest, Insert1M) {
   const size_t max_keys = 1024 * 1024;
   Insert(/*nthreads=*/ 10, max_keys);
-  Verify(/*nthreads=*/ 10);
+  ThreadedVerify(/*nthreads=*/ 10);
+}
+
+TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
+  Create(/*max_file_size=*/ 12 * 1024 * 1024,
+         /*max_size=*/ 1024 * 1024 * 1024);
+  const size_t max_keys = 1024 * 1024;
+  Insert(/*nthreads=*/ 1, max_keys);
+  Verify(/*relaxed=*/ true);
 }
 
 class BlkcacheDBTest : public DBTestBase {
@@ -190,7 +243,7 @@ static long TestGetTickerCount(const Options& options, Tickers ticker_type) {
   return options.statistics->getTickerCount(ticker_type);
 }
 
-TEST_F(BlkcacheDBTest, CompressedCache) {
+TEST_F(BlkcacheDBTest, SimpleCacheTest) {
   if (!Snappy_Supported()) {
     return;
   }
@@ -202,7 +255,7 @@ TEST_F(BlkcacheDBTest, CompressedCache) {
   // Iteration 3: both block cache and compressed cache
   // Iteration 4: both block cache and compressed cache, but DB is not
   // compressed
-  for (int iter = 0; iter < 4; iter++) {
+  for (int iter = 0; iter < 3; iter++) {
     Options options;
     options.write_buffer_size = 64*1024;        // small write buffer
     options.statistics = rocksdb::CreateDBStatistics();
@@ -217,19 +270,12 @@ TEST_F(BlkcacheDBTest, CompressedCache) {
         options.table_factory.reset(NewBlockBasedTableFactory(table_options));
         break;
       case 1:
-        // no block cache, only compressed cache
-        table_options.no_block_cache = true;
-        table_options.block_cache = nullptr;
-        table_options.block_cache_compressed = NewLRUCache(8*1024);
-        options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-        break;
-      case 2:
         // both compressed and uncompressed block cache
         table_options.block_cache = NewBlkCache();
         table_options.block_cache_compressed = NewLRUCache(8*1024);
         options.table_factory.reset(NewBlockBasedTableFactory(table_options));
         break;
-      case 3:
+      case 2:
         // both block cache and compressed cache, but DB is not compressed
         // also, make block cache sizes bigger, to trigger block cache hits
         table_options.block_cache = NewBlkCache();
@@ -281,16 +327,11 @@ TEST_F(BlkcacheDBTest, CompressedCache) {
         ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
         break;
       case 1:
-        // no block cache, only compressed cache
-        ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-        break;
-      case 2:
         // both compressed and uncompressed block cache
         ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
         ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
         break;
-      case 3:
+      case 2:
         // both compressed and uncompressed block cache
         ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
         ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_HIT), 0);
