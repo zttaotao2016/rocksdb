@@ -10,6 +10,8 @@ Status BlockCacheImpl::Open() {
 
   WriteLock _(&lock_);
 
+  assert(!size_);
+
   //
   // Create directory
   //
@@ -33,9 +35,7 @@ Status BlockCacheImpl::Open() {
   Info(opt_.info_log, "Resetting directory %s", opt_.path.c_str());
 
   assert(!cacheFile_);
-
   NewCacheFile();
-
   assert(cacheFile_);
 
   return Status::OK();
@@ -43,9 +43,7 @@ Status BlockCacheImpl::Open() {
 
 Status BlockCacheImpl::Close() {
   WriteLock _(&lock_);
-
   writer_.Stop();
-
   return Status::OK();
 }
 
@@ -137,6 +135,42 @@ void BlockCacheImpl::NewCacheFile() {
   // insert to cache files tree
   bool status = metadata_.Insert(cacheFile_);
   assert(status);
+}
+
+bool BlockCacheImpl::Reserve(const size_t size) {
+  WriteLock _(&lock_);
+  assert(size_ <= opt_.max_size_);
+
+  if (size + size_ <= opt_.max_size_) {
+    // there is enough space to write
+    size_ += size;
+    return true;
+  }
+
+  assert(size + size_ >= opt_.max_size_);
+  // there is not enough space to fit the requested data
+  // we can clear some space by evicting cold data
+
+  while (size + size_ > opt_.max_size_ * 0.9) {
+    unique_ptr<BlockCacheFile> f(metadata_.Evict());
+    if (!f) {
+      // nothing is evictable
+      return false;
+    }
+    assert(f->evictable_);
+    size_t file_size;
+    if (!f->Delete(&file_size).ok()) {
+      // unable to delete file
+      return false;
+    }
+
+    assert(file_size <= size_);
+    size_ -= file_size;
+  }
+
+  size_ += size;
+  assert(size_ <= opt_.max_size_ * 0.9);
+  return true;
 }
 
 //
