@@ -1,5 +1,6 @@
 #pragma once
 
+#include <unistd.h>
 #include <memory>
 #include "include/rocksdb/env.h"
 
@@ -70,8 +71,10 @@ class BlockingIOQueue : public IOQueue {
 class ThreadedWriter : public Writer {
  public:
 
-  ThreadedWriter(Env* const env, const size_t qdepth = 1)
-      : env_(env),
+  ThreadedWriter(PersistentBlockCache* const cache, Env* const env,
+                 const size_t qdepth = 1)
+      : Writer(cache),
+        env_(env),
         qdepth_(qdepth),
         q_(new BlockingIOQueue()),
         cond_exit_(&th_lock_),
@@ -115,6 +118,10 @@ class ThreadedWriter : public Writer {
 
       WriteableCacheFile* const f = io->file_;
       CacheWriteBuffer* const buf = io->buf_;
+
+      while(!self->cache_->Reserve(buf->Used())) {
+        sleep(1);
+      }
 
       Status s = f->file_->Append(Slice(buf->Data(), buf->Used()));
       if (!s.ok()) {

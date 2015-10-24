@@ -5,10 +5,14 @@ namespace rocksdb {
 template<class T>
 struct LRUElement
 {
-  LRUElement() : next_(nullptr), prev_(nullptr) {}
+  LRUElement(const bool evictable = true)
+    : next_(nullptr),
+      prev_(nullptr),
+      evictable_(evictable) {}
 
   T* next_;
   T* prev_;
+  bool evictable_;
 };
 
 template<class T>
@@ -58,18 +62,14 @@ public:
     assert(!head_->prev_);
 
     T* t = head_;
-
-    head_ = head_->next_;
-    if (head_) {
-      head_->prev_ = nullptr;
+    while (t && !t->evictable_) {
+      t = t->next_;
     }
 
-    if (t == tail_) {
-      assert(!head_);
-      tail_ = nullptr;
+    if (t) {
+      assert(t->evictable_);
+      UnlinkImpl(t);
     }
-
-    t->next_ = t->prev_ = nullptr;
 
     return t;
   }
