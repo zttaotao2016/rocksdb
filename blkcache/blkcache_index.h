@@ -85,6 +85,7 @@ class SimpleCacheFileIndex : public CacheFileIndex
 
   void RemoveFile(const uint32_t cache_id) override {
     size_t size = index_.erase(cache_id);
+    (void) size;
     assert(size == 1);
   }
 
