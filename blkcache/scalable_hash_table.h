@@ -4,12 +4,20 @@
 
 namespace rocksdb {
 
+#define PARANOID
+
+#ifdef PARANOID
+#define paranoid(x) assert(x)
+#else
+#define paranoid(x)
+#endif
+
 template<class T, class Hash, class Equal>
 class ScalableHashTable
 {
  public:
 
-  ScalableHashTable(const size_t capacity = 1000000,
+  ScalableHashTable(const size_t capacity = 1024 * 1024,
                     const float load_factor = 2.0, const size_t nlocks = 256)
     : capacity_(capacity),
       load_factor_(load_factor) {
@@ -30,56 +38,66 @@ class ScalableHashTable
     locks_.clear();
   }
 
-  void Insert(const T& t) {
-    assert(!Find(t));
-    WriteLock _(GetMutex(t));
-    buckets_[BucketIndex(t)].list_.push_back(t);
+  bool Insert(const T& t) {
+    const uint64_t h = Hash()(t);
+
+    WriteLock _(locks_[h % locks_.size()]);
+
+    auto& list = buckets_[h % buckets_.size()].list_;
+    if (Find(list, t) != list.end()) {
+      return false;
+    }
+
+    list.push_back(t);
+    return true;
   }
 
-  T Find(const T& t) {
+
+  bool Find(const T& t, T* ret) {
     GetMutex(t)->AssertHeld();
-    typename std::list<T>::iterator it;
-    if (!Find(t, it)) {
-      return nullptr;
+    const uint64_t h = Hash()(t);
+
+    auto& bucket = buckets_[h % buckets_.size()];
+    auto& list = bucket.list_;
+    auto it = Find(list, t);
+    if (it == list.end()) {
+      return false;;
     }
-    return *it;
+
+    if (ret) {
+      *ret = *it;
+    }
+
+    return true;
   }
 
-  T Erase(const T& t) {
-    WriteLock _(GetMutex(t));
-    auto& bucket = buckets_[BucketIndex(t)];
-    auto it = Find(t, bucket.list_);
-    if (it == bucket.list_.end()) {
-      return nullptr;
+  bool Erase(const T& t, T* ret) {
+    const uint64_t h = Hash()(t);
+    WriteLock _(locks_[h % locks_.size()]);
+
+    auto& bucket = buckets_[h % buckets_.size()];
+    auto& list = bucket.list_;
+    auto it = Find(list, t);
+    if (it == list.end()) {
+      return false;;
     }
-    T ret = *it;
-    bucket.list_.erase(it);
-    return ret;
+
+    if (ret) {
+      *ret = *it;
+    }
+
+    list.erase(it);
+    return true;
   }
 
   port::RWMutex* GetMutex(const T& t) {
-    auto h = Hash()(t);
-    assert(locks_.size());
-    return locks_[h % locks_.size()];
+    paranoid(locks_.size());
+    return locks_[Hash()(t) % locks_.size()];
   }
 
  private:
 
-  size_t BucketIndex(const T& t) {
-    assert(buckets_.size());
-    return Hash()(t) % buckets_.size();
-  }
-
-  bool Find(const T& t, typename std::list<T>::iterator& it)  {
-    auto& bucket = buckets_[BucketIndex(t)];
-    it = Find(t, bucket.list_);
-    if (it == bucket.list_.end()) {
-      return false;
-    }
-    return true;
-  }
-
-  typename std::list<T>::iterator Find(const T& t, std::list<T>& list) {
+  typename std::list<T>::iterator Find(std::list<T>& list, const T& t) {
     for (auto it = list.begin(); it != list.end(); ++it) {
       if (Equal()(*it, t)) {
         return it;
@@ -88,9 +106,10 @@ class ScalableHashTable
     return list.end();
   }
 
-  struct Bucket
-  {
-    Bucket() : count_(0) {}
+  struct Bucket {
+    Bucket()
+      : count_(0) {
+    }
 
     size_t count_;
     std::list<T> list_;
