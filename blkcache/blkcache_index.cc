@@ -10,8 +10,8 @@ bool SimpleBlockLookupIndex::Insert(BlockInfo* binfo) {
 bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {
   BlockInfo n(key);
   ReadLock _(index_.GetMutex(&n));
-  auto* ret = index_.Find(&n);
-  if (!ret) {
+  BlockInfo* ret;
+  if (!index_.Find(&n, &ret)) {
     return false;
   }
 
@@ -21,14 +21,15 @@ bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {
 
 BlockInfo* SimpleBlockLookupIndex::Remove(const Slice& key) {
   BlockInfo n(key);
-  BlockInfo* ret = index_.Erase(&n);
-  assert(ret);
+  BlockInfo* ret;
+  bool status = index_.Erase(&n, &ret);
+  assert(status);
   return ret;
 }
 
 void SimpleBlockLookupIndex::RemoveAllKeys(BlockCacheFile* f) {
   for (BlockInfo* binfo : f->block_infos()) {
-    bool status = index_.Erase(binfo);
+    bool status = index_.Erase(binfo, nullptr);
     assert(status);
   }
 }

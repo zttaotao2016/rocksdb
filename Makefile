@@ -855,6 +855,9 @@ hash_table_microbench: cache/hash_table_microbench.o db/db_test_util.o  $(LIBOBJ
 blkcache_test: blkcache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
+microbench_hashmap: blkcache/microbench_hashmap.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
 ldb: tools/ldb.o $(LIBOBJECTS)
 	$(AM_LINK)
 
