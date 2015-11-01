@@ -273,6 +273,7 @@ TEST_BENCH_SOURCES =                                                    \
   util/ldb_cmd_test.cc                                                  \
   blkcache/blkcache_test.cc                                             \
   blkcache/microbench_hashmap.cc                                        \
+  blkcache/microbench_cacheimpl.cc                                      \
 
 JNI_NATIVE_SOURCES =                                          \
   java/rocksjni/backupenginejni.cc                            \

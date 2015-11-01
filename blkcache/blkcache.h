@@ -30,7 +30,7 @@ class BlockCacheImpl : public PersistentBlockCache {
     std::shared_ptr<Logger> info_log;
     uint32_t writeBufferSize = 1 * 1024 * 1024;
     uint32_t writeBufferCount = 10;
-    uint32_t max_bufferpool_size_ = writeBufferSize * writeBufferCount;
+    uint64_t max_bufferpool_size_ = writeBufferSize * writeBufferCount;
     uint32_t maxCacheFileSize = 2 * 1024 * 1024;
     uint32_t writer_qdepth_ = 2;
     uint64_t max_size_ = UINT64_MAX;
