@@ -4,8 +4,6 @@
 
 namespace rocksdb {
 
-#define PARANOID
-
 #ifdef PARANOID
 #define paranoid(x) assert(x)
 #else

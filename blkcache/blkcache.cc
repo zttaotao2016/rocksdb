@@ -59,7 +59,8 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint16_t size,
 
   while (!cacheFile_->Append(key, Slice((char*) buf, size), lba)) {
     if (!cacheFile_->Eof()) {
-      return Status::IOError();
+      Debug(log_, "Error inserting to cache file %d", cacheFile_->cacheid());
+      return Status::TryAgain();
     }
 
     assert(cacheFile_->Eof());
@@ -146,6 +147,8 @@ bool BlockCacheImpl::Reserve(const size_t size) {
     size_ += size;
     return true;
   }
+
+  assert(!"here");
 
   assert(size + size_ >= opt_.max_size_);
   // there is not enough space to fit the requested data

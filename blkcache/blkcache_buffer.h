@@ -73,8 +73,8 @@ class CacheWriteBufferAllocator {
     assert(bufs_.size() * buffer_size_ == Capacity());
   }
 
-  void Init(const size_t bufferSize, const size_t bufferCount,
-            const size_t max_size) {
+  void Init(const uint32_t bufferSize, const uint32_t bufferCount,
+            const uint64_t max_size) {
     assert(max_size >= bufferSize * bufferCount);
 
     MutexLock _(&lock_);
@@ -120,9 +120,9 @@ class CacheWriteBufferAllocator {
     AdjustCapacity();
   }
 
-  size_t Capacity() const { return buffer_count_ * buffer_size_; }
-  size_t Free() const { return bufs_.size() * buffer_size_; }
-  size_t buffersize() const { return buffer_size_; }
+  uint64_t Capacity() const { return buffer_count_ * buffer_size_; }
+  uint64_t Free() const { return bufs_.size() * buffer_size_; }
+  uint32_t buffersize() const { return buffer_size_; }
 
  private:
   bool ExpandBuffer() {
@@ -163,9 +163,9 @@ class CacheWriteBufferAllocator {
 
   port::Mutex lock_;                    // Sync lock
   const bool auto_expand_;              // Should act like buffer pool ?
-  size_t buffer_size_;                  // Size of each buffer
-  size_t buffer_count_;                  // Buffer count
-  size_t target_size_;                  // Ideal operational size
+  uint32_t buffer_size_;                // Size of each buffer
+  uint32_t buffer_count_;               // Buffer count
+  uint64_t target_size_;                // Ideal operational size
   std::list<CacheWriteBuffer*> bufs_;   // Buffer stash
 };
 
