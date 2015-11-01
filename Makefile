@@ -287,8 +287,10 @@ TESTS = \
 	thread_list_test \
 	sst_dump_test \
 	compact_files_test \
-	perf_context_test
-	blkcache_test
+	perf_context_test \
+	blkcache_test \
+	microbench_hashmap \
+	microbench_cacheimpl \
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
@@ -840,6 +842,9 @@ blkcache_test: blkcache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTH
 	$(AM_LINK)
 
 microbench_hashmap: blkcache/microbench_hashmap.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+microbench_cacheimpl: blkcache/microbench_cacheimpl.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
