@@ -327,10 +327,8 @@ void WriteableCacheFile::DispatchBuffer() {
   assert(file_);
 
   auto* buf = bufs_[buf_doff_];
-  if (eof_ || !buf->Free()) {
-    writer_.Write(this, buf);
-    is_io_pending_ = true;
-  }
+  writer_.Write(this, buf);
+  is_io_pending_ = true;
 }
 
 void WriteableCacheFile::BufferWriteDone(CacheWriteBuffer* const buf) {

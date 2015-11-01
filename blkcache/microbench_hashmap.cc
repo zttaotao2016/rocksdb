@@ -1,4 +1,5 @@
 #include <iostream>
+#include <unistd.h>
 #include <atomic>
 #include <sys/time.h>
 #include <unordered_map>
@@ -51,7 +52,8 @@ class MicroBenchmark {
       sec_(sec),
       ninserts_(0),
       nreads_(0),
-      nerases_(0) {
+      nerases_(0),
+      quit_(false) {
     max_key_ = 1024 * 1024;
     val_ = string(1000, 'a');
 
@@ -60,6 +62,12 @@ class MicroBenchmark {
     StartThreads(nthread_write, WriteMain);
     StartThreads(nthread_read, ReadMain);
     StartThreads(nthread_erase, EraseMain);
+
+    uint64_t start = NowInMillSec();
+    while (!quit_) {
+      quit_ = NowInMillSec() - start > sec_ * 1000;
+      sleep(1);
+    }
 
     Env* env = Env::Default();
     env->WaitForJoin();
@@ -72,16 +80,14 @@ class MicroBenchmark {
   }
 
   void RunWrite() {
-    uint64_t start = NowInMillSec();
-    while (!Timedout(start)) {
+    while (!quit_) {
       impl_->Insert(random() + max_key_, string(1000, 'a'));
       ninserts_++;
     }
   }
 
   void RunRead() {
-    uint64_t start = NowInMillSec();
-    while (!Timedout(start)) {
+    while (!quit_) {
       string s;
       int k = random() % max_key_;
       bool status = impl_->Lookup(k, &s);
@@ -91,8 +97,7 @@ class MicroBenchmark {
   }
 
   void RunErase() {
-    uint64_t start = NowInMillSec();
-    while (!Timedout(start)) {
+    while (!quit_) {
       impl_->Erase(random() + max_key_);
       nerases_++;
     }
@@ -100,10 +105,6 @@ class MicroBenchmark {
 
 
  private:
-
-  bool Timedout(const uint64_t start) {
-    return NowInMillSec() - start > sec_ * 1000;
-  }
 
   void StartThreads(const size_t n, void (*fn)(void*)) {
     Env* env = Env::Default();
@@ -140,6 +141,7 @@ class MicroBenchmark {
   atomic<size_t> ninserts_;
   atomic<size_t> nreads_;
   atomic<size_t> nerases_;
+  bool quit_;
 };
 
 //
