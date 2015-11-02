@@ -1,4 +1,4 @@
-#include <blkcache/blkcache_index.h>
+#include <cache/blkcache_index.h>
 
 using namespace rocksdb;
 

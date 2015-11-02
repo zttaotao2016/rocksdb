@@ -1,6 +1,6 @@
 #include <memory>
 #include <util/crc32c.h>
-#include <blkcache/blkcache_cachefile.h>
+#include <cache/blkcache_cachefile.h>
 
 using namespace rocksdb;
 
