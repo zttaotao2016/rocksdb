@@ -4,9 +4,9 @@
 #include <memory>
 #include <string>
 
-#include "blkcache/blkcache_buffer.h"
-#include "blkcache/blkcache_lrulist.h"
-#include "blkcache/persistent_blkcache.h"
+#include "cache/blkcache_buffer.h"
+#include "cache/blkcache_lrulist.h"
+#include "cache/persistent_blkcache.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"

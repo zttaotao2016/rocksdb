@@ -1,6 +1,6 @@
 #include <utility>
 
-#include "blkcache/blkcache.h"
+#include "cache/blkcache.h"
 
 using namespace rocksdb;
 using std::unique_ptr;
@@ -147,8 +147,6 @@ bool BlockCacheImpl::Reserve(const size_t size) {
     size_ += size;
     return true;
   }
-
-  assert(!"here");
 
   assert(size + size_ >= opt_.max_size_);
   // there is not enough space to fit the requested data

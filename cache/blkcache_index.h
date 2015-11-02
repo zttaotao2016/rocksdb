@@ -5,9 +5,9 @@
 #include <string>
 
 #include "include/rocksdb/slice.h"
-#include "blkcache/blkcache_cachefile.h"
-#include "blkcache/scalable_hash_table.h"
-#include "blkcache/blkcache_lrulist.h"
+#include "cache/blkcache_cachefile.h"
+#include "cache/hash_table.h"
+#include "cache/blkcache_lrulist.h"
 
 namespace rocksdb {
 
@@ -171,7 +171,7 @@ class SimpleBlockLookupIndex : public BlockLookupIndex {
   };
 
 
-  typedef ScalableHashTable<BlockInfo*, Hash, Equal> IndexType;
+  typedef HashTable<BlockInfo*, Hash, Equal> IndexType;
 
   IndexType index_;
 };
