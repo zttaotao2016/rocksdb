@@ -9,7 +9,7 @@
 
 #include <iostream>
 
-#include "blkcache/blkcache.h"
+#include "cache/blkcache.h"
 #include "util/testharness.h"
 #include "util/arena.h"
 #include "db/db_test_util.h"

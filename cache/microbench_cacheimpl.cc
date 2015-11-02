@@ -8,7 +8,7 @@
 #include "include/rocksdb/env.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
-#include "blkcache/blkcache.h"
+#include "cache/blkcache.h"
 
 using namespace rocksdb;
 using namespace std;

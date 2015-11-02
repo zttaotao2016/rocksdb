@@ -102,9 +102,9 @@ LIB_SOURCES =                                                   \
   util/histogram.cc                                             \
   util/instrumented_mutex.cc                                    \
   util/iostats_context.cc                                       \
-  blkcache/blkcache.cc                                          \
-  blkcache/blkcache_cachefile.cc                                \
-  blkcache/blkcache_index.cc                                    \
+  cache/blkcache.cc                                             \
+  cache/blkcache_cachefile.cc                                   \
+  cache/blkcache_index.cc                                       \
   utilities/backupable/backupable_db.cc                         \
   utilities/convenience/info_log_finder.cc                      \
   utilities/checkpoint/checkpoint.cc                            \
@@ -271,9 +271,10 @@ TEST_BENCH_SOURCES =                                                    \
   util/thread_local_test.cc                                             \
   util/thread_local_test.cc                                             \
   util/ldb_cmd_test.cc                                                  \
-  blkcache/blkcache_test.cc                                             \
-  blkcache/microbench_hashmap.cc                                        \
-  blkcache/microbench_cacheimpl.cc                                      \
+  cache/blkcache_test.cc                                                \
+  cache/hash_table_test.cc                                              \
+  cache/hash_table_microbench.cc                                        \
+  cache/microbench_cacheimpl.cc                                         \
 
 JNI_NATIVE_SOURCES =                                          \
   java/rocksjni/backupenginejni.cc                            \

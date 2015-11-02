@@ -1,9 +1,9 @@
 #pragma once
 
-#include "blkcache/blkcache_cachefile.h"
-#include "blkcache/persistent_blkcache.h"
-#include "blkcache/blkcache_index.h"
-#include "blkcache/blkcache_writer.h"
+#include "cache/blkcache_cachefile.h"
+#include "cache/persistent_blkcache.h"
+#include "cache/blkcache_index.h"
+#include "cache/blkcache_writer.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"
