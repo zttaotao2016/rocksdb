@@ -15,17 +15,14 @@ bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {
     return false;
   }
 
-  assert(ret->key_size_ == key.size());
-  assert(memcmp(ret->key_, key.data(), key.size()) == 0);
   *lba = ret->lba_;
   return true;
 }
 
 BlockInfo* SimpleBlockLookupIndex::Remove(const Slice& key) {
   BlockInfo n(key);
-  BlockInfo* ret = nullptr;
+  BlockInfo* ret;
   bool status = index_.Erase(&n, &ret);
-  (void) status;
   assert(status);
   return ret;
 }
@@ -33,7 +30,6 @@ BlockInfo* SimpleBlockLookupIndex::Remove(const Slice& key) {
 void SimpleBlockLookupIndex::RemoveAllKeys(BlockCacheFile* f) {
   for (BlockInfo* binfo : f->block_infos()) {
     bool status = index_.Erase(binfo, nullptr);
-    (void) status;
     assert(status);
   }
 }

@@ -42,11 +42,12 @@ Status BlockCacheImpl::Open() {
 }
 
 Status BlockCacheImpl::Close() {
+  WriteLock _(&lock_);
   writer_.Stop();
   return Status::OK();
 }
 
-Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint32_t size,
+Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint16_t size,
                              LBA* lba) {
   // pre-condition
   assert(buf);
@@ -69,13 +70,12 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint32_t size,
   BlockInfo* info = new BlockInfo(key, *lba);
   cacheFile_->Add(info);
   bool ok = metadata_.Insert(info);
-  (void) ok;
   assert(ok);
 
   return Status::OK();
 }
 
-bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
+bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char>* val,
                            uint32_t* size)
 {
   ReadLock _(&lock_);
@@ -83,7 +83,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   LBA lba;
   bool status = metadata_.Lookup(key, &lba);
   if (!status) {
-    Info(log_, "Error looking up index for key %s", key.ToString().c_str());
+    Error(log_, "Error looking up index for key %s", key.ToString().c_str());
     return status;
   }
 
@@ -94,7 +94,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
     return false;
   }
 
-  unique_ptr<char[]> scratch(new char[lba.size_]);
+  unique_ptr<char> scratch(new char[lba.size_]);
   Slice blk_key;
   Slice blk_val;
   if (!file->Read(lba, &blk_key, &blk_val, scratch.get())) {
@@ -135,7 +135,6 @@ void BlockCacheImpl::NewCacheFile() {
 
   // insert to cache files tree
   bool status = metadata_.Insert(cacheFile_);
-  (void) status;
   assert(status);
 }
 
@@ -178,11 +177,8 @@ bool BlockCacheImpl::Reserve(const size_t size) {
 //
 // RocksBlockCache
 //
-RocksBlockCache::RocksBlockCache(const std::shared_ptr<BlockCacheImpl>& impl) {
-  cache_ = impl;
-}
-
-RocksBlockCache::RocksBlockCache(Env* env, const std::string path) {
+RocksBlockCache::RocksBlockCache(Env* env,
+                                 const std::string path) {
   BlockCacheImpl::Options opt;
 
   env->NewLogger(path + "/cache.log", &opt.info_log);
@@ -196,54 +192,52 @@ RocksBlockCache::~RocksBlockCache() {
   cache_->Close();
 }
 
-RocksBlockCache::Handle* RocksBlockCache::Insert(const Slice& key, void* value,
-                                                 const size_t size,
-                                                 void (*deleter)(const Slice&, void*)) {
-  return new DataHandle(key, (char*) value, size, deleter);
-}
-
-Cache::Handle* RocksBlockCache::InsertBlock(const Slice& key, Block* block,
-                                            void (*deleter)(const Slice&, void*)) {
+Cache::Handle* RocksBlockCache::Insert(const Slice& key, void* value,
+                                const size_t size,
+                                void (*deleter)(const Slice&, void*)) {
   assert(cache_);
-  assert(block);
-
-  // At this point we don't support hash index or prefix index
-  assert(!block->HasIndex());
-  assert(block->compression_type() == kNoCompression);
-  assert(block->size());
+  // assert(!deleter);
 
   LBA lba;
-  if (!cache_->Insert(key, (void*) block->data(), block->size(), &lba).ok()) {
-    Info(log_, "Error inserting to cache. key=%s", key.ToString().c_str());
+  if (!cache_->Insert(key, value, size, &lba).ok()) {
+    Error(log_, "Error inserting to cache. key=%s", key.ToString().c_str());
     return nullptr;
   }
 
-  return new BlockHandle(key, block,  deleter);
+  auto* ret = new BlkCacheHandle();
+  ret->Assign(key, (char*) value, size);
+
+  return ret;
 }
 
 Cache::Handle* RocksBlockCache::Lookup(const Slice& key) {
   assert(cache_);
 
-  unique_ptr<char[]> data;
+  unique_ptr<char> data;
   uint32_t size;
   if (!cache_->Lookup(key, &data, &size)) {
-    Info(log_, "Error looking up key %s", key.ToString().c_str());
+    Error(log_, "Error looking up key %s", key.ToString().c_str());
     return nullptr;
   }
 
-  Block* block = Block::NewBlock(std::move(data), size);
-  assert(block->size() == size);
-  auto* h = new BlockHandle(key, block);
-  return h;
+  auto* ret = new BlkCacheHandle();
+  ret->Copy(key, data.get(), size);
+
+  data.release();
+
+  return ret;
 }
 
 void RocksBlockCache::Release(Cache::Handle* handle) {
   assert(handle);
-  HandleBase* h = (HandleBase*) handle;
-  delete h;
+  delete (BlkCacheHandle*) handle;
 }
 
 void* RocksBlockCache::Value(Cache::Handle* handle) {
   assert(handle);
-  return ((HandleBase*) handle)->value();
+  return ((BlkCacheHandle*) handle)->data_;
 }
+
+
+ 
+

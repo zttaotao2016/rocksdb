@@ -1,37 +1,10 @@
 #include <memory>
-
-#include "util/crc32c.h"
-#include "cache/blkcache_cachefile.h"
-#include "cache/cache_writeablefile.h"
+#include <util/crc32c.h>
+#include <cache/blkcache_cachefile.h>
 
 using namespace rocksdb;
 
 using std::unique_ptr;
-
-//
-// File creation factories
-//
-Status NewCacheWritableFile(Env* const env, const std::string & filepath,
-                            std::unique_ptr<WritableFile>* file) {
-  Status s;
-
-  EnvOptions opt;
-  opt.use_os_buffer = true;
-  s = env->NewWritableFile(filepath, file, opt);
-
-  return s;
-}
-
-Status NewCacheRandomAccessFile(Env* const env, const std::string & filepath,
-                                std::unique_ptr<RandomAccessFile>* file) {
-  Status s;
-
-  EnvOptions opt;
-  opt.use_os_buffer = true;
-  s = env->NewRandomAccessFile(filepath, file, opt);
-
-  return s;
-}
 
 //
 // BlockCacheFile
@@ -191,7 +164,9 @@ bool RandomAccessCacheFile::OpenImpl() {
 
   Debug(log_, "Opening cache file %s", Path().c_str());
 
-  Status status = NewCacheRandomAccessFile(env_, Path(), &file_);
+  EnvOptions opt;
+  opt.use_os_buffer = false;
+  Status status = env_->NewRandomAccessFile(Path(), &file_, opt);
   if (!status.ok()) {
     Error(log_, "Error opening random access file %s. %s", Path().c_str(),
           status.ToString().c_str());
@@ -261,7 +236,9 @@ bool WriteableCacheFile::Create() {
          s.ToString().c_str());
   }
 
-  s = NewCacheWritableFile(env_, Path(), &file_);
+  EnvOptions opt;
+  opt.use_os_buffer = false;
+  s = env_->NewWritableFile(Path(), &file_, opt);
   if (!s.ok()) {
     Warn(log_, "Unable to create file %s. %s", Path().c_str(),
          s.ToString().c_str());
@@ -399,12 +376,13 @@ bool WriteableCacheFile::ReadBuffer(const LBA& lba, char* data)
 
   assert(start_idx <= buf_woff_);
 
+
   for (size_t i = start_idx; pending_nbytes && i < bufs_.size(); ++i) {
     assert(i <= buf_woff_);
     auto* buf = bufs_[i];
     assert(i == buf_woff_ || !buf->Free());
-    size_t nbytes = pending_nbytes > (buf->Used() - start_off) ?
-                                (buf->Used() - start_off) : pending_nbytes;
+    size_t nbytes = pending_nbytes > buf->Used() - start_off ?
+                                buf->Used() - start_off : pending_nbytes;
     memcpy(tmp, buf->Data() + start_off, nbytes);
 
     pending_nbytes -= nbytes;

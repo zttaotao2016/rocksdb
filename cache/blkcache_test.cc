@@ -9,12 +9,10 @@
 
 #include <iostream>
 
-#include "include/rocksdb/cache.h"
 #include "cache/blkcache.h"
 #include "util/testharness.h"
 #include "util/arena.h"
 #include "db/db_test_util.h"
-#include "table/block_builder.h"
 
 using namespace std;
 
@@ -39,7 +37,7 @@ class BlockCacheImplTest : public testing::Test {
 
   BlockCacheImplTest()
       : env_(Env::Default()),
-        path_(test::TmpDir(env_) + "/cache_test_") {
+        path_(test::TmpDir(env_) + "/nvm_block_cache_test") {
     Create();
   }
 
@@ -56,8 +54,8 @@ class BlockCacheImplTest : public testing::Test {
 
     opt.path = path_;
     auto logfile = path_ + "/test.log";
-    log_.reset(new ConsoleLogger());
-    // env_->NewLogger(logfile, &log_);
+    // log_.reset(new ConsoleLogger());
+    env_->NewLogger(logfile, &log_);
     opt.info_log = log_;
     assert(s.ok());
 
@@ -69,15 +67,15 @@ class BlockCacheImplTest : public testing::Test {
     }
 
     cache_.reset(new BlockCacheImpl(env_, opt));
+
     s = cache_->Open();
     assert(s.ok());
-
-    block_cache_.reset(new RocksBlockCache(cache_));
   }
 
   virtual ~BlockCacheImplTest() {
     Status s = cache_->Close();
     assert(s.ok());
+
     log_->Flush();
   }
 
@@ -87,19 +85,6 @@ class BlockCacheImplTest : public testing::Test {
 
     for (size_t i = 0; i < nthreads; i++) {
       env_->StartThread(&BlockCacheImplTest::InsertMain, this);
-    }
-
-    while (key_ < max_keys_) {
-      sleep(1);
-    }
-  }
-
-  void InsertBlocks(const size_t nthreads, const size_t max_keys) {
-    key_ = 0;
-    max_keys_ = max_keys;
-
-    for (size_t i = 0; i < nthreads; i++) {
-      env_->StartThread(&BlockCacheImplTest::InsertBlocksMain, this);
     }
 
     while (key_ < max_keys_) {
@@ -146,7 +131,6 @@ class BlockCacheImplTest : public testing::Test {
   }
 
   void Verify(const bool relaxed = false) {
-    key_ = 0;
     const string prefix = "key_prefix_";
     while (true) {
       size_t i = key_++;
@@ -158,7 +142,7 @@ class BlockCacheImplTest : public testing::Test {
       memset(edata, '0' + (i % 10), sizeof(edata));
       auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
-      unique_ptr<char[]> block;
+      unique_ptr<char> block;
       uint32_t block_size;
       if (relaxed && !cache_->Lookup(key, &block, &block_size)) {
         continue;
@@ -189,75 +173,9 @@ class BlockCacheImplTest : public testing::Test {
     }
   }
 
-  void InsertBlocks() {
-    const string prefix = "key_prefix_";
-    while (true) {
-      size_t i = key_++;
-      if (i > max_keys_) {
-        break;
-      }
-
-      BlockBuilder bb(/*restarts=*/ 1);
-      std::string key(1024, i % 255);
-      std::string val(4096, i % 255);
-      bb.Add(Slice(key), Slice(val));
-      Slice block_template = bb.Finish();
-
-      const size_t block_size = block_template.size();
-      unique_ptr<char[]> data(new char[block_size]);
-      memcpy(data.get(), block_template.data(), block_size);
-
-      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
-      Slice block_key(k);
-
-      Block* block = Block::NewBlock(std::move(data), block_size);
-      assert(block);
-      assert(block->size());
-
-      Cache::Handle* h = nullptr;
-      while(!(h = block_cache_->InsertBlock(block_key, block, nullptr))) {
-        sleep(1);
-      }
-      assert(block_cache_->Value(h) == block);
-      block_cache_->Release(h);
-    }
-  }
-
-  void VerifyBlocks(const bool relaxed = false) {
-    key_ = 0;
-    const string prefix = "key_prefix_";
-    while (true) {
-      size_t i = key_++;
-      if (i > max_keys_) {
-        break;
-      }
-
-      BlockBuilder bb(/*restarts=*/ 1);
-      std::string key(1024, i % 255);
-      std::string val(4096, i % 255);
-      bb.Add(Slice(key), Slice(val));
-      Slice block_template = bb.Finish();
-
-      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
-      Slice block_key(k);
-      Cache::Handle* h = block_cache_->Lookup(block_key);
-      ASSERT_TRUE(h);
-      Block* block = (Block*) block_cache_->Value(h);
-      ASSERT_TRUE(block->size() == block_template.size());
-      ASSERT_TRUE(memcmp(block->data(), block_template.data(),
-                         block->size()) == 0);
-      block_cache_->Release(h);
-    }
-  }
-
   static void InsertMain(void* arg) {
     BlockCacheImplTest* self = (BlockCacheImplTest*) arg;
     self->Insert();
-  }
-
-  static void InsertBlocksMain(void* arg) {
-    BlockCacheImplTest* self = (BlockCacheImplTest*) arg;
-    self->InsertBlocks();
   }
 
   static void VerifyMain(void* arg) {
@@ -265,8 +183,7 @@ class BlockCacheImplTest : public testing::Test {
     self->Verify();
   }
 
-  std::shared_ptr<BlockCacheImpl> cache_;
-  std::shared_ptr<RocksBlockCache> block_cache_;
+  std::unique_ptr<BlockCacheImpl> cache_;
   Arena arena_;
   Env* env_;
   const std::string path_;
@@ -283,12 +200,6 @@ TEST_F(BlockCacheImplTest, Insert) {
   ThreadedVerify(/*nthreads=*/ 5);
 }
 
-TEST_F(BlockCacheImplTest, BlockInsert) {
-  const size_t max_keys = 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 1, max_keys);
-  VerifyBlocks();
-}
-
 TEST_F(BlockCacheImplTest, InsertWithEviction) {
   Create(/*max_file_size=*/ 12 * 1024 * 1024,
          /*max_size=*/ 200 * 1024 * 1024);
@@ -302,12 +213,6 @@ TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
   Insert(/*nthreads=*/ 5, max_keys);
   Verify();
   ThreadedVerify(/*nthreads=*/ 5);
-}
-
-TEST_F(BlockCacheImplTest, MultithreadedBlockInsert) {
-  const size_t max_keys = 5 * 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 5, max_keys);
-  VerifyBlocks();
 }
 
 TEST_F(BlockCacheImplTest, Insert1M) {
@@ -326,11 +231,11 @@ TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
 
 class BlkcacheDBTest : public DBTestBase {
  public:
-  BlkcacheDBTest() : DBTestBase("/cache_test") {}
+  BlkcacheDBTest() : DBTestBase("/blkcache_db_test") {}
 
   shared_ptr<Cache> NewBlkCache() {
     return shared_ptr<Cache>(
-      new RocksBlockCache(Env::Default(),  test::TmpDir(env_) + "/"));
+      new RocksBlockCache(Env::Default(),  test::TmpDir(env_) + "/blkcache"));
   }
 };
 

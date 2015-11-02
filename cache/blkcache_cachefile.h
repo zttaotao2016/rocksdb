@@ -91,7 +91,6 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
 /**
  * class RandomAccessFile
  *
- * (thread safe)
  */
 class RandomAccessCacheFile : public BlockCacheFile {
  public:
@@ -133,7 +132,6 @@ class RandomAccessCacheFile : public BlockCacheFile {
 /**
  * class WriteableCacheFile
  *
- * (thread safe)
  */
 class WriteableCacheFile : public RandomAccessCacheFile {
  public:

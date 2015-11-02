@@ -14,7 +14,6 @@
 #include "util/crc32c.h"
 #include "util/mutexlock.h"
 #include <list>
-#include <set>
 #include <memory>
 #include <string>
 #include <stdexcept>
@@ -31,8 +30,8 @@ class BlockCacheImpl : public PersistentBlockCache {
     std::shared_ptr<Logger> info_log;
     uint32_t writeBufferSize = 1 * 1024 * 1024;
     uint32_t writeBufferCount = 10;
-    uint64_t max_bufferpool_size_ = 2ULL * writeBufferSize * writeBufferCount;
-    uint64_t maxCacheFileSize = 2ULL * 1024 * 1024;
+    uint64_t max_bufferpool_size_ = writeBufferSize * writeBufferCount;
+    uint32_t maxCacheFileSize = 2 * 1024 * 1024;
     uint32_t writer_qdepth_ = 2;
     uint64_t max_size_ = UINT64_MAX;
   };
@@ -58,8 +57,8 @@ class BlockCacheImpl : public PersistentBlockCache {
   // override from PersistentBlockCache
   Status Open() override;
   Status Close() override;
-  Status Insert(const Slice& key, void* data, uint32_t size, LBA* lba) override;
-  bool Lookup(const Slice & key, std::unique_ptr<char[]>* data,
+  Status Insert(const Slice& key, void* data, uint16_t size, LBA* lba) override;
+  bool Lookup(const Slice & key, std::unique_ptr<char>* data,
               uint32_t* size) override;
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
@@ -78,103 +77,57 @@ class BlockCacheImpl : public PersistentBlockCache {
   ThreadedWriter writer_;
   SimpleBlockCacheMetadata metadata_;
   std::shared_ptr<Logger> log_;
-  std::atomic<uint64_t> size_;
+  size_t size_;
 };
 
-/**
- *
- */
-class Util {
- public:
-
-  static Slice Clone(const Slice& key) {
-    char* data = new char[key.size()];
-    memcpy(data, key.data(), key.size());
-    return Slice(data, key.size());
-  }
-
-  static void Free(Slice& key) {
-    delete[] key.data();
-  }
-};
-
-/**
- *
- */
 class RocksBlockCache : public Cache {
  public:
 
-  struct HandleBase : Handle {
-    typedef void (*deleter_t)(const Slice&, void*);
-
-    explicit HandleBase(const Slice& key, const size_t size,
-                        deleter_t deleter)
-      : key_(Util::Clone(key)),
-        size_(size),
-        deleter_(deleter) {
-    }
-
-    virtual ~HandleBase() {
-      Util::Free(key_);
-    }
-
-    virtual void* value() = 0;
-
-    Slice key_;
-    const size_t size_ = 0;
-    deleter_t deleter_ = nullptr;
-  };
-
-  struct DataHandle : HandleBase
+  struct BlkCacheHandle : Handle
   {
-    explicit DataHandle(const Slice& key, char* const data = nullptr,
-                        const size_t size = 0,
-                        const deleter_t deleter = nullptr)
-      : HandleBase(key, size, deleter)
-      , data_(data) {}
+    BlkCacheHandle()
+      : should_dalloc_(false) {}
 
-    virtual ~DataHandle() {
-      assert(deleter_);
-      (*deleter_)(key_, data_);
+    void Copy(const Slice& key, char* const data, const size_t size)
+    {
+      char* k = new char[key.size()];
+      memcpy(k, key.data(), key.size());
+      key_ = Slice(k, key.size());
+
+      data_ = new char[size];
+      memcpy(data_, data, size);
+
+      should_dalloc_ = true;
     }
 
-    void* value() override { return data_; }
-
-    char* data_ = nullptr;
-  };
-
-  struct BlockHandle : HandleBase
-  {
-
-    explicit BlockHandle(const Slice& key, Block* const block,
-                         const deleter_t deleter = nullptr)
-      : HandleBase(key, block->size(), deleter)
-      , block_(block) {
-      assert(block);
+    void Assign(const Slice& key, char* const data, const size_t size)
+    {
+      key_ = key;
+      data_ = data;
+      size_ = size;
+      should_dalloc_ = false;
     }
 
-    virtual ~BlockHandle() {
-      if (deleter_) {
-        (*deleter_)(key_, block_);
-      } else {
-        delete block_;
+
+    ~BlkCacheHandle()
+    {
+      if (should_dalloc_) {
+        delete[] key_.data();
+        delete[] data_;
       }
     }
 
-    void* value() override { return block_; }
-
-    Block* block_ = nullptr;
+    bool should_dalloc_;
+    Slice key_;
+    char* data_;
+    size_t size_;
   };
 
-  RocksBlockCache(const shared_ptr<BlockCacheImpl>& cache_impl);
   RocksBlockCache(Env* env, const std::string path);
   virtual ~RocksBlockCache();
 
   Handle* Insert(const Slice& key, void* value, size_t charge,
                  void (*deleter)(const Slice& key, void* value)) override;
-
-  Handle* InsertBlock(const Slice& key, Block* value,
-                      void (*deleter)(const Slice& key, void* value)) override;
 
   Handle* Lookup(const Slice& key) override;
 
@@ -201,7 +154,7 @@ class RocksBlockCache : public Cache {
 
   // returns the memory size for a specific entry in the cache.
   size_t GetUsage(Handle* handle) const override {
-    return ((HandleBase*) handle)->size_;
+    return ((BlkCacheHandle*) handle)->size_;
   }
 
   // returns the memory size for the entries in use by the system

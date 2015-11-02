@@ -21,10 +21,7 @@
 namespace rocksdb {
 
 /**
- * CacheWriteBuffer
  *
- * Buffer abstraction that can be manipulated via append
- * (not thread safe)
  */
 class CacheWriteBuffer {
  public:
@@ -62,10 +59,7 @@ class CacheWriteBuffer {
 };
 
 /**
- * CacheWriteBufferAllocator
  *
- * Buffer pool abstraction
- * (not thread safe)
  */
 class CacheWriteBufferAllocator {
  public:
@@ -87,16 +81,14 @@ class CacheWriteBufferAllocator {
 
     target_size_ = max_size;
     buffer_size_ = bufferSize;
+    buffer_count_ = bufferCount;
 
-    for (uint32_t i = 0; i < buffer_count_; i++) {
+    for (size_t i = 0; i < buffer_count_; i++) {
       auto* buf = new CacheWriteBuffer(buffer_size_);
-      assert(buf);
       if (buf) {
         bufs_.push_back(buf);
       }
     }
-
-    buffer_count_ = bufs_.size();
   }
 
   CacheWriteBuffer* Allocate() {
