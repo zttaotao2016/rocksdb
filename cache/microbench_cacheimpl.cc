@@ -15,13 +15,15 @@ using namespace std;
 
 DEFINE_int32(nsec, 10, "nsec");
 DEFINE_int32(nthread_write, 1, "Insert threads");
-DEFINE_int32(nthread_read, 0, "Lookup threads");
+DEFINE_int32(nthread_read, 1, "Lookup threads");
 DEFINE_string(path, "/tmp/microbench/blkcache", "Path for cachefile");
 DEFINE_int32(buffer_size, 1024 * 1024, "Write buffer size");
+DEFINE_uint64(max_buffer_size, 0, "Maximum write buffer size");
 DEFINE_int32(nbuffers, 100, "Buffer count");
-DEFINE_int32(cache_file_size, 100, "Cache file size");
+DEFINE_int64(cache_file_size, 100, "Cache file size");
 DEFINE_int32(qdepth, 2, "qdepth");
 DEFINE_int32(iosize, 4 * 1024 * 1024, "IO size");
+DEFINE_uint64(cache_size, UINT64_MAX, "Cache size");
 
 uint64_t NowInMillSec() {
   timeval tv;
@@ -50,7 +52,10 @@ class MicroBenchmark {
  public:
 
   MicroBenchmark()
-    : bytes_(0) {
+    : insert_key_(0),
+      read_key_(0),
+      bytes_written_(0),
+      bytes_read_(0) {
     Status status;
 
     Env* env = Env::Default();
@@ -59,9 +64,11 @@ class MicroBenchmark {
     opt.info_log = shared_ptr<Logger>(new ConsoleLogger());
     opt.writeBufferSize = FLAGS_buffer_size;
     opt.writeBufferCount = FLAGS_nbuffers;
-    opt.max_bufferpool_size_ = 2 * FLAGS_buffer_size * FLAGS_nbuffers;
+    opt.max_bufferpool_size_ = FLAGS_max_buffer_size ? FLAGS_max_buffer_size
+                  : 2LLU * opt.writeBufferSize * opt.writeBufferCount;
     opt.maxCacheFileSize = FLAGS_cache_file_size;
     opt.writer_qdepth_ = FLAGS_qdepth;
+    opt.max_size_ = FLAGS_cache_size;
 
     cout << "Creating BlockCacheImpl" << endl;
 
@@ -71,6 +78,10 @@ class MicroBenchmark {
 
     status = impl_->Open();
     assert(status.ok());
+
+    Prepop();
+
+    cout << "Prepop completed" << endl;
 
     StartThreads(FLAGS_nthread_write, WriteMain);
     StartThreads(FLAGS_nthread_read, ReadMain);
@@ -83,41 +94,70 @@ class MicroBenchmark {
 
     impl_->Close();
 
+    env->WaitForJoin();
+
     sec_ = (NowInMillSec() - start) / 1000;
 
-    env->WaitForJoin();
 
     if (sec_) {
       cout << "sec: " << sec_ << endl;
-      cout << "written: " << bytes_ << " B" << endl;
-      cout << "W MB/s: " << (bytes_ / sec_) / (1024 * 1024) << endl;
+      cout << "written " << bytes_written_ << " B" << endl;
+      cout << "Read " << bytes_read_ << " B" << endl;
+      cout << "W MB/s: " << (bytes_written_ / sec_) / (1024 * 1024) << endl;
+      cout << "R MB/s: " << (bytes_read_ / sec_) / (1024 * 1024) << endl;
+    }
+  }
+
+  void Prepop()
+  {
+    for (uint64_t i = 0; i < 1024 * 1024; ++i) {
+      InsertKey(i);
+      insert_key_++;
+      read_key_++;
     }
   }
 
   void RunWrite() {
     while (!quit_) {
-      uint64_t k[3];
-      k[0] = k[1] = 0;
-      k[2] = random();
+      InsertKey(insert_key_++);
+      bytes_written_ += FLAGS_iosize;
+    }
+  }
 
-      char data[FLAGS_iosize];
-      Slice key((char*) &k, sizeof(k));
-      LBA lba;
-      while (true) {
-        Status status = impl_->Insert(key, data, FLAGS_iosize, &lba);
-        if (status == Status::TryAgain()) {
-          continue;
-        }
-        assert(status.ok());
-        break;
+  void InsertKey(const uint64_t val) {
+    uint64_t k[3];
+    k[0] = k[1] = 0;
+    k[2] = val;
+
+    char data[FLAGS_iosize];
+    Slice key((char*) &k, sizeof(k));
+    LBA lba;
+
+    while (!quit_) {
+      Status status = impl_->Insert(key, data, FLAGS_iosize, &lba);
+      if (status == Status::TryAgain()) {
+        continue;
       }
-
-      bytes_ += FLAGS_iosize;
+      assert(status.ok());
+      break;
     }
   }
 
   void RunRead() {
     while (!quit_) {
+      uint64_t k[3];
+      k[0] = k[1] = 0;
+      k[2] = random() % read_key_;
+
+      Slice key((char*) &k, sizeof(k));
+      LBA lba;
+
+      unique_ptr<char> val;
+      uint32_t size;
+      bool ok = impl_->Lookup(key, &val, &size);
+      assert(ok);
+      assert(size == (size_t) FLAGS_iosize);
+      bytes_read_ += size;
     }
   }
 
@@ -139,8 +179,11 @@ class MicroBenchmark {
   }
 
   unique_ptr<BlockCacheImpl> impl_;
+  atomic<uint64_t> insert_key_;
+  atomic<uint64_t> read_key_;
   bool quit_ = false;
-  atomic<uint64_t> bytes_;
+  atomic<uint64_t> bytes_written_;
+  atomic<uint64_t> bytes_read_;
   uint64_t sec_ = 0;
 };
 
