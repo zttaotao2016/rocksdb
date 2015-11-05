@@ -130,6 +130,7 @@ class MicroBenchmark {
     k[2] = val;
 
     char data[FLAGS_iosize];
+    memset(data, val % 255, FLAGS_iosize);
     Slice key((char*) &k, sizeof(k));
     LBA lba;
 
@@ -157,6 +158,9 @@ class MicroBenchmark {
       bool ok = impl_->Lookup(key, &val, &size);
       assert(ok);
       assert(size == (size_t) FLAGS_iosize);
+      char expected[FLAGS_iosize];
+      memset(expected, k[2] % 255, FLAGS_iosize);
+      assert(memcmp(val.get(), expected, size) == 0);
       bytes_read_ += size;
     }
   }

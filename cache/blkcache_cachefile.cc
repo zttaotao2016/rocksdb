@@ -1,10 +1,57 @@
 #include <memory>
-#include <util/crc32c.h>
-#include <cache/blkcache_cachefile.h>
+
+#include "util/crc32c.h"
+#include "cache/blkcache_cachefile.h"
+#include "cache/cache_writeablefile.h"
 
 using namespace rocksdb;
 
 using std::unique_ptr;
+
+//
+// File creation factories
+//
+Status NewCacheWritableFile(Env* const env, const std::string & filepath,
+                            std::unique_ptr<WritableFile>* file) {
+  Status s;
+
+#ifdef OS_LINUX
+  CacheWritableFile* f = new CacheWritableFile();
+  s = f->Create(filepath);
+  if (!s.ok()) {
+    delete f;
+    return s;
+  }
+  file->reset(f);
+#else
+  EnvOptions opt;
+  opt.use_os_buffer = true;
+  s = env->NewWritableFile(filepath, file, opt);
+#endif
+
+  return s;
+}
+
+Status NewCacheRandomAccessFile(Env* const env, const std::string & filepath,
+                                std::unique_ptr<RandomAccessFile>* file) {
+  Status s;
+
+#ifdef OS_LINUX
+  CacheRandomAccessFile* f = new CacheRandomAccessFile();
+  s = f->Open(filepath);
+  if (!s.ok()) {
+    delete f;
+    return s;
+  }
+  file->reset(f);
+#else
+  EnvOptions opt;
+  opt.use_os_buffer = true;
+  s = env->NewRandomAccessFile(filepath, file, opt);
+#endif
+
+  return s;
+}
 
 //
 // BlockCacheFile
@@ -164,9 +211,7 @@ bool RandomAccessCacheFile::OpenImpl() {
 
   Debug(log_, "Opening cache file %s", Path().c_str());
 
-  EnvOptions opt;
-  opt.use_os_buffer = false;
-  Status status = env_->NewRandomAccessFile(Path(), &file_, opt);
+  Status status = NewCacheRandomAccessFile(env_, Path(), &file_);
   if (!status.ok()) {
     Error(log_, "Error opening random access file %s. %s", Path().c_str(),
           status.ToString().c_str());
@@ -236,9 +281,7 @@ bool WriteableCacheFile::Create() {
          s.ToString().c_str());
   }
 
-  EnvOptions opt;
-  opt.use_os_buffer = false;
-  s = env_->NewWritableFile(Path(), &file_, opt);
+  s = NewCacheWritableFile(env_, Path(), &file_);
   if (!s.ok()) {
     Warn(log_, "Unable to create file %s. %s", Path().c_str(),
          s.ToString().c_str());
