@@ -42,7 +42,6 @@ Status BlockCacheImpl::Open() {
 }
 
 Status BlockCacheImpl::Close() {
-  WriteLock _(&lock_);
   writer_.Stop();
   return Status::OK();
 }
