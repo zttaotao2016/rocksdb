@@ -37,7 +37,7 @@ class BlockCacheImplTest : public testing::Test {
 
   BlockCacheImplTest()
       : env_(Env::Default()),
-        path_(test::TmpDir(env_) + "/nvm_block_cache_test") {
+        path_(test::TmpDir(env_) + "/cache_test") {
     Create();
   }
 
@@ -54,8 +54,8 @@ class BlockCacheImplTest : public testing::Test {
 
     opt.path = path_;
     auto logfile = path_ + "/test.log";
-    // log_.reset(new ConsoleLogger());
-    env_->NewLogger(logfile, &log_);
+    log_.reset(new ConsoleLogger());
+    // env_->NewLogger(logfile, &log_);
     opt.info_log = log_;
     assert(s.ok());
 
@@ -75,7 +75,6 @@ class BlockCacheImplTest : public testing::Test {
   virtual ~BlockCacheImplTest() {
     Status s = cache_->Close();
     assert(s.ok());
-
     log_->Flush();
   }
 
@@ -231,7 +230,7 @@ TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
 
 class BlkcacheDBTest : public DBTestBase {
  public:
-  BlkcacheDBTest() : DBTestBase("/blkcache_db_test") {}
+  BlkcacheDBTest() : DBTestBase("/cache_test") {}
 
   shared_ptr<Cache> NewBlkCache() {
     return shared_ptr<Cache>(
