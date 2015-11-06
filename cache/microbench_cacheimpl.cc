@@ -24,6 +24,7 @@ DEFINE_int64(cache_file_size, 100, "Cache file size");
 DEFINE_int32(qdepth, 2, "qdepth");
 DEFINE_int32(iosize, 4 * 1024 * 1024, "IO size");
 DEFINE_uint64(cache_size, UINT64_MAX, "Cache size");
+DEFINE_bool(benchmark, false, "Benchmark mode");
 
 uint64_t NowInMillSec() {
   timeval tv;
@@ -130,7 +131,9 @@ class MicroBenchmark {
     k[2] = val;
 
     char data[FLAGS_iosize];
-    memset(data, val % 255, FLAGS_iosize);
+    if (!FLAGS_benchmark) {
+      memset(data, val % 255, FLAGS_iosize);
+    }
     Slice key((char*) &k, sizeof(k));
     LBA lba;
 
@@ -158,9 +161,14 @@ class MicroBenchmark {
       bool ok = impl_->Lookup(key, &val, &size);
       assert(ok);
       assert(size == (size_t) FLAGS_iosize);
-      char expected[FLAGS_iosize];
-      memset(expected, k[2] % 255, FLAGS_iosize);
-      assert(memcmp(val.get(), expected, size) == 0);
+
+      // Verify data
+      if (!FLAGS_benchmark) {
+        char expected[FLAGS_iosize];
+        memset(expected, k[2] % 255, FLAGS_iosize);
+        assert(memcmp(val.get(), expected, size) == 0);
+      }
+
       bytes_read_ += size;
     }
   }
@@ -199,6 +207,8 @@ main(int argc, char** argv) {
   google::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
                           " [OPTIONS]...");
   google::ParseCommandLineFlags(&argc, &argv, false);
+
+  cout << "benchmark : " << FLAGS_benchmark << endl;
 
   unique_ptr<MicroBenchmark> _(new MicroBenchmark());
 
