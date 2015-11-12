@@ -29,10 +29,10 @@ class PersistentBlockCache {
 
   virtual Status Close() = 0;
 
-  virtual Status Insert(const Slice& key, void* data, const uint16_t size,
+  virtual Status Insert(const Slice& key, void* data, const uint32_t size,
                         LBA* lba) = 0;
 
-  virtual bool Lookup(const Slice & key, std::unique_ptr<char>* val,
+  virtual bool Lookup(const Slice & key, std::unique_ptr<char[]>* val,
                       uint32_t* size) = 0;
 
   virtual bool Erase(const Slice& key) = 0;

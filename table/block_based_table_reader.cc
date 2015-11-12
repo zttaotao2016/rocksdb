@@ -796,9 +796,9 @@ Status BlockBasedTable::PutDataBlockToCache(
   // insert into uncompressed block cache
   assert((block->value->compression_type() == kNoCompression));
   if (block_cache != nullptr && block->value->cachable()) {
-    block->cache_handle = block_cache->Insert(block_cache_key, block->value,
-                                              block->value->usable_size(),
-                                              &DeleteCachedEntry<Block>);
+    block->cache_handle = block_cache->InsertBlock(block_cache_key,
+                                                   block->value,
+                                                   &DeleteCachedEntry<Block>);
     RecordTick(statistics, BLOCK_CACHE_ADD);
     RecordTick(statistics, BLOCK_CACHE_BYTES_WRITE,
                block->value->usable_size());
