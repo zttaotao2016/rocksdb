@@ -55,10 +55,11 @@ class Block {
   // If total_order_seek is true, hash_index_ and prefix_index_ are ignored.
   // This option only applies for index block. For data block, hash_index_
   // and prefix_index_ are null, so this option does not matter.
-  Iterator* NewIterator(const Comparator* comparator,
-      BlockIter* iter = nullptr, bool total_order_seek = true);
-  void SetBlockHashIndex(BlockHashIndex* hash_index);
-  void SetBlockPrefixIndex(BlockPrefixIndex* prefix_index);
+  InternalIterator* NewIterator(const Comparator* comparator,
+                                BlockIter* iter = nullptr,
+                                bool total_order_seek = true);
+  void SetBlockHashIndex(BlockHashIndex* hash_idx);
+  void SetBlockPrefixIndex(BlockPrefixIndex* prefix_idx);
 
   // Report an approximation of how much memory has been used.
   size_t ApproximateMemoryUsage() const;

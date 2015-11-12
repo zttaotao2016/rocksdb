@@ -298,7 +298,6 @@ TESTS = \
 	blkcache_test \
 	hash_table_test \
 	hash_table_microbench \
-	microbench_cacheimpl \
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
