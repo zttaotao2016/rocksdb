@@ -15,19 +15,9 @@ Status NewCacheWritableFile(Env* const env, const std::string & filepath,
                             std::unique_ptr<WritableFile>* file) {
   Status s;
 
-#ifdef OS_LINUX
-  CacheWritableFile* f = new CacheWritableFile();
-  s = f->Create(filepath);
-  if (!s.ok()) {
-    delete f;
-    return s;
-  }
-  file->reset(f);
-#else
   EnvOptions opt;
   opt.use_os_buffer = true;
   s = env->NewWritableFile(filepath, file, opt);
-#endif
 
   return s;
 }
@@ -36,19 +26,9 @@ Status NewCacheRandomAccessFile(Env* const env, const std::string & filepath,
                                 std::unique_ptr<RandomAccessFile>* file) {
   Status s;
 
-#ifdef OS_LINUX
-  CacheRandomAccessFile* f = new CacheRandomAccessFile();
-  s = f->Open(filepath);
-  if (!s.ok()) {
-    delete f;
-    return s;
-  }
-  file->reset(f);
-#else
   EnvOptions opt;
   opt.use_os_buffer = true;
   s = env->NewRandomAccessFile(filepath, file, opt);
-#endif
 
   return s;
 }
@@ -419,13 +399,12 @@ bool WriteableCacheFile::ReadBuffer(const LBA& lba, char* data)
 
   assert(start_idx <= buf_woff_);
 
-
   for (size_t i = start_idx; pending_nbytes && i < bufs_.size(); ++i) {
     assert(i <= buf_woff_);
     auto* buf = bufs_[i];
     assert(i == buf_woff_ || !buf->Free());
-    size_t nbytes = pending_nbytes > buf->Used() - start_off ?
-                                buf->Used() - start_off : pending_nbytes;
+    size_t nbytes = pending_nbytes > (buf->Used() - start_off) ?
+                                (buf->Used() - start_off) : pending_nbytes;
     memcpy(tmp, buf->Data() + start_off, nbytes);
 
     pending_nbytes -= nbytes;

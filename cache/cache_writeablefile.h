@@ -43,6 +43,7 @@ class CacheWritableFile : public WritableFile {
   Status Close() override {
     int status;
     status = fsync(fd_);
+    (void) status;
     assert(status == 0);
     status = close(fd_);
     assert(status == 0);
@@ -69,6 +70,7 @@ class CacheRandomAccessFile : public RandomAccessFile {
   CacheRandomAccessFile() : fd_(-1) {}
   virtual ~CacheRandomAccessFile() {
     int status = close(fd_);
+    (void) status;
     assert(status == 0);
   }
 

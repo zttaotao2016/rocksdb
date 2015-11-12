@@ -70,11 +70,19 @@ class Block {
   InternalIterator* NewIterator(const Comparator* comparator,
                                 BlockIter* iter = nullptr,
                                 bool total_order_seek = true);
-  void SetBlockHashIndex(BlockHashIndex* hash_index);
-  void SetBlockPrefixIndex(BlockPrefixIndex* prefix_index);
+  void SetBlockHashIndex(BlockHashIndex* hash_idx);
+  void SetBlockPrefixIndex(BlockPrefixIndex* prefix_idx);
 
   // Report an approximation of how much memory has been used.
   size_t ApproximateMemoryUsage() const;
+
+  static Block* NewBlock(std::unique_ptr<char[]>&& val, const size_t val_size) {
+    BlockContents block_contents(std::move(val), val_size,
+                                 /*cacheable=*/ false, kNoCompression);
+    return new Block(std::move(block_contents));
+  }
+
+  bool HasIndex() const { return hash_index_ || prefix_index_; }
 
  private:
   BlockContents contents_;

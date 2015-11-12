@@ -14,6 +14,7 @@
 #include "util/crc32c.h"
 #include "util/mutexlock.h"
 #include <list>
+#include <set>
 #include <memory>
 #include <string>
 #include <stdexcept>
@@ -57,8 +58,8 @@ class BlockCacheImpl : public PersistentBlockCache {
   // override from PersistentBlockCache
   Status Open() override;
   Status Close() override;
-  Status Insert(const Slice& key, void* data, uint16_t size, LBA* lba) override;
-  bool Lookup(const Slice & key, std::unique_ptr<char>* data,
+  Status Insert(const Slice& key, void* data, uint32_t size, LBA* lba) override;
+  bool Lookup(const Slice & key, std::unique_ptr<char[]>* data,
               uint32_t* size) override;
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
@@ -80,54 +81,100 @@ class BlockCacheImpl : public PersistentBlockCache {
   std::atomic<uint64_t> size_;
 };
 
+/**
+ *
+ */
+class Util {
+ public:
+
+  static Slice Clone(const Slice& key) {
+    char* data = new char[key.size()];
+    memcpy(data, key.data(), key.size());
+    return Slice(data, key.size());
+  }
+
+  static void Free(Slice& key) {
+    delete[] key.data();
+  }
+};
+
+/**
+ *
+ */
 class RocksBlockCache : public Cache {
  public:
 
-  struct BlkCacheHandle : Handle
+  struct HandleBase : Handle {
+    typedef void (*deleter_t)(const Slice&, void*);
+
+    explicit HandleBase(const Slice& key, const size_t size,
+                        deleter_t deleter)
+      : key_(Util::Clone(key)),
+        size_(size),
+        deleter_(deleter) {
+    }
+
+    virtual ~HandleBase() {
+      Util::Free(key_);
+    }
+
+    virtual void* value() = 0;
+
+    Slice key_;
+    const size_t size_ = 0;
+    deleter_t deleter_ = nullptr;
+  };
+
+  struct DataHandle : HandleBase
   {
-    BlkCacheHandle()
-      : should_dalloc_(false) {}
+    explicit DataHandle(const Slice& key, char* const data = nullptr,
+                        const size_t size = 0,
+                        const deleter_t deleter = nullptr)
+      : HandleBase(key, size, deleter)
+      , data_(data) {}
 
-    void Copy(const Slice& key, char* const data, const size_t size)
-    {
-      char* k = new char[key.size()];
-      memcpy(k, key.data(), key.size());
-      key_ = Slice(k, key.size());
-
-      data_ = new char[size];
-      memcpy(data_, data, size);
-
-      should_dalloc_ = true;
+    virtual ~DataHandle() {
+      assert(deleter_);
+      (*deleter_)(key_, data_);
     }
 
-    void Assign(const Slice& key, char* const data, const size_t size)
-    {
-      key_ = key;
-      data_ = data;
-      size_ = size;
-      should_dalloc_ = false;
+    void* value() override { return data_; }
+
+    char* data_ = nullptr;
+  };
+
+  struct BlockHandle : HandleBase
+  {
+
+    explicit BlockHandle(const Slice& key, Block* const block,
+                         const deleter_t deleter = nullptr)
+      : HandleBase(key, block->size(), deleter)
+      , block_(block) {
+      assert(block);
     }
 
-
-    ~BlkCacheHandle()
-    {
-      if (should_dalloc_) {
-        delete[] key_.data();
-        delete[] data_;
+    virtual ~BlockHandle() {
+      if (deleter_) {
+        (*deleter_)(key_, block_);
+      } else {
+        delete block_;
       }
     }
 
-    bool should_dalloc_;
-    Slice key_;
-    char* data_;
-    size_t size_;
+    void* value() override { return block_; }
+
+    Block* block_ = nullptr;
   };
 
+  RocksBlockCache(const shared_ptr<BlockCacheImpl>& cache_impl);
   RocksBlockCache(Env* env, const std::string path);
   virtual ~RocksBlockCache();
 
   Handle* Insert(const Slice& key, void* value, size_t charge,
                  void (*deleter)(const Slice& key, void* value)) override;
+
+  Handle* InsertBlock(const Slice& key, Block* value,
+                      void (*deleter)(const Slice& key, void* value)) override;
 
   Handle* Lookup(const Slice& key) override;
 
@@ -154,7 +201,7 @@ class RocksBlockCache : public Cache {
 
   // returns the memory size for a specific entry in the cache.
   size_t GetUsage(Handle* handle) const override {
-    return ((BlkCacheHandle*) handle)->size_;
+    return ((HandleBase*) handle)->size_;
   }
 
   // returns the memory size for the entries in use by the system
