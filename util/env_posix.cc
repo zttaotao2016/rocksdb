@@ -146,15 +146,19 @@ namespace {
 
     struct stat buf;
     int result = fstat(fd, &buf);
+    assert(result != -1);
     if (result == -1) {
       return 0;
     }
 
     long version = 0;
     result = ioctl(fd, FS_IOC_GETVERSION, &version);
+#if defined(NDEBUG) || !defined(LINUX_RAMFS)
+    assert(result != -1);
     if (result == -1) {
       return 0;
     }
+#endif
     uint64_t uversion = (uint64_t)version;
 
     char* rid = id;

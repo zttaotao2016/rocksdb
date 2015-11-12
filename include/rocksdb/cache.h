@@ -25,6 +25,7 @@
 #include <memory>
 #include <stdint.h>
 #include "rocksdb/slice.h"
+#include "table/block.h"
 
 namespace rocksdb {
 
@@ -62,6 +63,11 @@ class Cache {
   // value will be passed to "deleter".
   virtual Handle* Insert(const Slice& key, void* value, size_t charge,
                          void (*deleter)(const Slice& key, void* value)) = 0;
+
+  virtual Handle* InsertBlock(const Slice& key, Block* block,
+                              void (*deleter)(const Slice&, void*)) {
+    return Insert(key, (void*) block, block->usable_size(), deleter);
+  }
 
   // If the cache has no mapping for "key", returns nullptr.
   //

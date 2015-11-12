@@ -156,7 +156,7 @@ class MicroBenchmark {
       Slice key((char*) &k, sizeof(k));
       LBA lba;
 
-      unique_ptr<char> val;
+      unique_ptr<char[]> val;
       uint32_t size;
       bool ok = impl_->Lookup(key, &val, &size);
       assert(ok);
