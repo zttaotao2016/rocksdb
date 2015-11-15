@@ -36,6 +36,13 @@ class BlockingIOQueue : public IOQueue {
  public:
   BlockingIOQueue() : cond_empty_(&lock_) {}
 
+  virtual ~BlockingIOQueue() {
+    for (auto* io : q_) {
+      delete io;
+    }
+    q_.clear();
+  }
+
   void Push(IO* io) override {
     MutexLock _(&lock_);
     q_.push_back(io);

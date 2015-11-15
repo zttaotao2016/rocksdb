@@ -188,6 +188,16 @@ class HashTable {
     return &locks_[lock_idx];
   }
 
+  void Clear(void (*fn)(T)) {
+    for (uint32_t i = 0; i < nbuckets_; ++i) {
+      const uint32_t lock_idx = i % nlocks_;
+      WriteLock _(&locks_[lock_idx]);
+      for (auto& t : buckets_[i].list_) {
+        (*fn)(t);
+      }
+    }
+  }
+
  private:
   // Substitute for std::find with custom comparator operator
   typename std::list<T>::const_iterator Find(const std::list<T>& list,

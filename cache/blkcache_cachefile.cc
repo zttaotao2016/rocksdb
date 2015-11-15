@@ -198,7 +198,6 @@ bool RandomAccessCacheFile::OpenImpl() {
     return false;
   }
 
-  evictable_ = true;
   return true;
 }
 
@@ -246,6 +245,14 @@ bool RandomAccessCacheFile::ParseRec(const LBA& lba, Slice* key, Slice* val,
 
 WriteableCacheFile::~WriteableCacheFile() {
   WriteLock _(&rwlock_);
+  if (!eof_) {
+    // This file never flushed. We give priority to shutdown since this is a
+    // cache
+    // TODO: Figure a way to flush the pending data
+    assert(file_);
+    assert(refs_);
+    --refs_;
+  }
   ClearBuffers();
 }
 
@@ -267,6 +274,9 @@ bool WriteableCacheFile::Create() {
          s.ToString().c_str());
     return false;
   }
+
+  assert(!refs_);
+  ++refs_;
 
   return true;
 }
@@ -433,6 +443,9 @@ void WriteableCacheFile::Close() {
 
   ClearBuffers();
   file_.reset();
+
+  assert(refs_);
+  --refs_;
 }
 
 void WriteableCacheFile::ClearBuffers() {
