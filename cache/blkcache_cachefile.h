@@ -56,7 +56,7 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
  public:
   BlockCacheFile(Env* const env, const std::string& dir,
                  const uint32_t cache_id)
-    : LRUElement<BlockCacheFile>(/*evictable=*/ false),
+    : LRUElement<BlockCacheFile>(),
       env_(env),
       dir_(dir),
       cache_id_(cache_id) {

@@ -1,18 +1,26 @@
 #pragma once
 
+#include <atomic>
+
+#include "util/mutexlock.h"
+
 namespace rocksdb {
 
 template<class T>
 struct LRUElement
 {
-  LRUElement(const bool evictable = true)
+  explicit LRUElement()
     : next_(nullptr),
       prev_(nullptr),
-      evictable_(evictable) {}
+      refs_(0) {}
+
+  virtual ~LRUElement() {
+    assert(!refs_);
+  }
 
   T* next_;
   T* prev_;
-  bool evictable_;
+  std::atomic<size_t> refs_;
 };
 
 template<class T>
@@ -62,12 +70,12 @@ public:
     assert(!head_->prev_);
 
     T* t = head_;
-    while (t && !t->evictable_) {
+    while (t && t->refs_) {
       t = t->next_;
     }
 
     if (t) {
-      assert(t->evictable_);
+      assert(!t->refs_);
       UnlinkImpl(t);
     }
 

@@ -35,5 +35,6 @@ void SimpleBlockLookupIndex::RemoveAllKeys(BlockCacheFile* f) {
     bool status = index_.Erase(binfo, nullptr);
     (void) status;
     assert(status);
+    delete binfo;
   }
 }

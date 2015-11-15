@@ -106,6 +106,7 @@ LIB_SOURCES =                                                   \
   cache/blkcache.cc                                             \
   cache/blkcache_cachefile.cc                                   \
   cache/blkcache_index.cc                                       \
+  cache/cache_volatile.cc                                       \
   utilities/backupable/backupable_db.cc                         \
   utilities/convenience/info_log_finder.cc                      \
   utilities/checkpoint/checkpoint.cc                            \

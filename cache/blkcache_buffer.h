@@ -56,7 +56,7 @@ class CacheWriteBuffer {
   char* Data() const { return buf_.get(); }
 
  private:
-  std::unique_ptr<char> buf_;
+  std::unique_ptr<char[]> buf_;
   const size_t size_;
   size_t pos_;
 };
@@ -77,6 +77,10 @@ class CacheWriteBufferAllocator {
   virtual ~CacheWriteBufferAllocator() {
     MutexLock _(&lock_);
     assert(bufs_.size() * buffer_size_ == Capacity());
+    for (auto* buf : bufs_) {
+      delete buf;
+    }
+    bufs_.clear();
   }
 
   void Init(const uint32_t bufferSize, const uint32_t bufferCount,
