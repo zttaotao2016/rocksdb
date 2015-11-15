@@ -77,7 +77,7 @@ class SimpleCacheFileIndex : public CacheFileIndex
     }
 
     BlockCacheFile* f = lru_.Pop();
-    assert(!f || f->evictable_);
+    assert(!f || !f->refs_);
     return f;
   }
 
@@ -145,7 +145,9 @@ class BlockLookupIndex {
  */
 class SimpleBlockLookupIndex : public BlockLookupIndex {
  public:
-  virtual ~SimpleBlockLookupIndex() {}
+  virtual ~SimpleBlockLookupIndex() {
+    index_.Clear(&DeleteBlockInfo);
+  }
 
   bool Insert(BlockInfo* binfo) override;
   bool Lookup(const Slice& key, LBA* lba) override;
@@ -155,6 +157,10 @@ class SimpleBlockLookupIndex : public BlockLookupIndex {
   void RemoveAllKeys(BlockCacheFile* f) override;
 
  private:
+  static void DeleteBlockInfo(BlockInfo* binfo) {
+    assert(binfo);
+    delete binfo;
+  }
 
   struct Hash {
     size_t operator()(BlockInfo* node) const {

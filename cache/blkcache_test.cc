@@ -11,6 +11,7 @@
 
 #include "include/rocksdb/cache.h"
 #include "cache/blkcache.h"
+#include "cache/cache_volatile.h"
 #include "util/testharness.h"
 #include "util/arena.h"
 #include "db/db_test_util.h"
@@ -71,8 +72,6 @@ class BlockCacheImplTest : public testing::Test {
     cache_.reset(new BlockCacheImpl(env_, opt));
     s = cache_->Open();
     assert(s.ok());
-
-    block_cache_.reset(new RocksBlockCache(cache_));
   }
 
   virtual ~BlockCacheImplTest() {
@@ -189,6 +188,12 @@ class BlockCacheImplTest : public testing::Test {
     }
   }
 
+  static void DeleteBlock(const Slice& key, void* data) {
+    assert(data);
+    auto* block = (Block*) data;
+    delete block;
+  }
+
   void InsertBlocks() {
     const string prefix = "key_prefix_";
     while (true) {
@@ -215,7 +220,7 @@ class BlockCacheImplTest : public testing::Test {
       assert(block->size());
 
       Cache::Handle* h = nullptr;
-      while(!(h = block_cache_->InsertBlock(block_key, block, nullptr))) {
+      while(!(h = block_cache_->InsertBlock(block_key, block, &DeleteBlock))) {
         sleep(1);
       }
       assert(block_cache_->Value(h) == block);
@@ -266,7 +271,7 @@ class BlockCacheImplTest : public testing::Test {
   }
 
   std::shared_ptr<BlockCacheImpl> cache_;
-  std::shared_ptr<RocksBlockCache> block_cache_;
+  std::shared_ptr<Cache> block_cache_;
   Arena arena_;
   Env* env_;
   const std::string path_;
@@ -284,6 +289,14 @@ TEST_F(BlockCacheImplTest, Insert) {
 }
 
 TEST_F(BlockCacheImplTest, BlockInsert) {
+  block_cache_ = std::make_shared<RocksBlockCache>(cache_);
+  const size_t max_keys = 10 * 1024;
+  InsertBlocks(/*nthreads=*/ 1, max_keys);
+  VerifyBlocks();
+}
+
+TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert) {
+  block_cache_ = std::make_shared<VolatileCache>();
   const size_t max_keys = 10 * 1024;
   InsertBlocks(/*nthreads=*/ 1, max_keys);
   VerifyBlocks();
@@ -305,6 +318,14 @@ TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
 }
 
 TEST_F(BlockCacheImplTest, MultithreadedBlockInsert) {
+  block_cache_ = std::make_shared<RocksBlockCache>(cache_);
+  const size_t max_keys = 5 * 10 * 1024;
+  InsertBlocks(/*nthreads=*/ 5, max_keys);
+  VerifyBlocks();
+}
+
+TEST_F(BlockCacheImplTest, MultithreadedVolatileCacheBlockInsert) {
+  block_cache_ = std::make_shared<VolatileCache>();
   const size_t max_keys = 5 * 10 * 1024;
   InsertBlocks(/*nthreads=*/ 5, max_keys);
   VerifyBlocks();

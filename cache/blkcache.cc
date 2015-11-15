@@ -159,7 +159,7 @@ bool BlockCacheImpl::Reserve(const size_t size) {
       // nothing is evictable
       return false;
     }
-    assert(f->evictable_);
+    assert(!f->refs_);
     size_t file_size;
     if (!f->Delete(&file_size).ok()) {
       // unable to delete file
