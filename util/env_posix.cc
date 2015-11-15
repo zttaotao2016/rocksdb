@@ -116,8 +116,8 @@ namespace {
     }
 
     long version = 0;
+#if !defined(LINUX_RAMFS)
     result = ioctl(fd, FS_IOC_GETVERSION, &version);
-#if defined(NDEBUG) || !defined(LINUX_RAMFS)
     assert(result != -1);
     if (result == -1) {
       return 0;
