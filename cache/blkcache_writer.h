@@ -78,7 +78,7 @@ class BlockingIOQueue : public IOQueue {
 class ThreadedWriter : public Writer {
  public:
 
-  ThreadedWriter(PersistentBlockCache* const cache, Env* const env,
+  ThreadedWriter(SecondaryCacheTier* const cache, Env* const env,
                  const size_t qdepth = 1)
       : Writer(cache),
         env_(env),

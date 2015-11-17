@@ -1,7 +1,7 @@
 #pragma once
 
 #include "cache/blkcache_cachefile.h"
-#include "cache/persistent_blkcache.h"
+#include "cache/cache_tier.h"
 #include "cache/blkcache_index.h"
 #include "cache/blkcache_writer.h"
 #include "db/skiplist.h"
@@ -22,9 +22,9 @@
 namespace rocksdb {
 
 /**
- *
+ * Block cache implementation
  */
-class BlockCacheImpl : public PersistentBlockCache {
+class BlockCacheImpl : public SecondaryCacheTier {
  public:
   struct Options {
     std::string path;
@@ -55,76 +55,68 @@ class BlockCacheImpl : public PersistentBlockCache {
 
   virtual ~BlockCacheImpl() {}
 
-  // override from PersistentBlockCache
-  Status Open() override;
-  Status Close() override;
-  Status Insert(const Slice& key, void* data, uint32_t size, LBA* lba) override;
+  // Open and initialize cache
+  Status Open();
+
+  /*
+   * override from SecondaryCacheTier
+   */
+  Status Insert(const Slice& key, void* data, uint32_t size) override;
+  bool LookupKey(const Slice& key) override;
   bool Lookup(const Slice & key, std::unique_ptr<char[]>* data,
               uint32_t* size) override;
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
+  Status Close() override;
 
  private:
+  // Create a new cache file
   void NewCacheFile();
-
+  // Get cache directory path
   std::string GetCachePath() const { return opt_.path + "/cache"; }
 
-  port::RWMutex lock_;
-  Env* const env_;
-  const Options opt_;
-  uint32_t writerCacheId_;
-  WriteableCacheFile* cacheFile_;
-  CacheWriteBufferAllocator bufferAllocator_;
-  ThreadedWriter writer_;
-  SimpleBlockCacheMetadata metadata_;
-  std::shared_ptr<Logger> log_;
-  std::atomic<uint64_t> size_;
+  port::RWMutex lock_;            // Synchronization
+  Env* const env_;                // Env
+  const Options opt_;             // BlockCache options
+  uint32_t writerCacheId_;        // Current cache file identifier (auto inc)
+  WriteableCacheFile* cacheFile_; // Current cache file reference
+  CacheWriteBufferAllocator bufferAllocator_; // Buffer provider
+  ThreadedWriter writer_;               // Writer threads
+  SimpleBlockCacheMetadata metadata_;   // Cache meta data manager
+  std::shared_ptr<Logger> log_;         // logger
+  std::atomic<uint64_t> size_;          // Size of the cache
 };
 
 /**
- *
- */
-class Util {
- public:
-
-  static Slice Clone(const Slice& key) {
-    char* data = new char[key.size()];
-    memcpy(data, key.data(), key.size());
-    return Slice(data, key.size());
-  }
-
-  static void Free(Slice& key) {
-    delete[] key.data();
-  }
-};
-
-/**
- *
+ * Wrapper implementation for test BlockCacheImpl with RocksDB
  */
 class RocksBlockCache : public Cache {
  public:
-
+  /*
+   * Handle abstraction to support raw pointers and blocks
+   */
   struct HandleBase : Handle {
     typedef void (*deleter_t)(const Slice&, void*);
 
     explicit HandleBase(const Slice& key, const size_t size,
                         deleter_t deleter)
-      : key_(Util::Clone(key)),
+      : key_(std::move(key.ToString())),
         size_(size),
         deleter_(deleter) {
     }
 
-    virtual ~HandleBase() {
-      Util::Free(key_);
-    }
+    virtual ~HandleBase() {}
 
     virtual void* value() = 0;
 
-    Slice key_;
+    std::string key_;
     const size_t size_ = 0;
     deleter_t deleter_ = nullptr;
   };
 
+  /*
+   * Handle for raw pointers
+   */
   struct DataHandle : HandleBase
   {
     explicit DataHandle(const Slice& key, char* const data = nullptr,
@@ -143,9 +135,11 @@ class RocksBlockCache : public Cache {
     char* data_ = nullptr;
   };
 
+  /*
+   * Handle for blocks
+   */
   struct BlockHandle : HandleBase
   {
-
     explicit BlockHandle(const Slice& key, Block* const block,
                          const deleter_t deleter = nullptr)
       : HandleBase(key, block->size(), deleter)
@@ -170,58 +164,43 @@ class RocksBlockCache : public Cache {
   RocksBlockCache(Env* env, const std::string path);
   virtual ~RocksBlockCache();
 
+  // Cache override
   Handle* Insert(const Slice& key, void* value, size_t charge,
                  void (*deleter)(const Slice& key, void* value)) override;
-
   Handle* InsertBlock(const Slice& key, Block* value,
                       void (*deleter)(const Slice& key, void* value)) override;
-
   Handle* Lookup(const Slice& key) override;
-
   void Release(Handle* handle) override;
-
   void* Value(Handle* handle) override;
-
   void Erase(const Slice& key) override {
     cache_->Erase(key);
   }
-
   uint64_t NewId() override { return (uint64_t)this; }
-
-  void SetCapacity(size_t capacity) override { capacity_ = capacity; }
-
-  size_t GetCapacity() const override {
-    return capacity_;
-  }
-
-  size_t GetUsage() const override {
-    assert(!"not implemented");
-    throw std::runtime_error("not implemented");
-  }
-
-  // returns the memory size for a specific entry in the cache.
   size_t GetUsage(Handle* handle) const override {
     return ((HandleBase*) handle)->size_;
+  }
+  void SetCapacity(size_t capacity) override {}
+  size_t GetCapacity() const override {
+    return 0;
+  }
+
+  // Not implemented override
+  size_t GetUsage() const override {
+    assert(!"not implemented");
   }
 
   // returns the memory size for the entries in use by the system
   size_t GetPinnedUsage() const override {
     assert(!"not implemented");
-    throw std::runtime_error("not supported");
   }
 
   void ApplyToAllCacheEntries(void (*callback)(void*, size_t),
                               bool thread_safe) override {
     assert(!"not implemented");
-    throw std::runtime_error("not supported");
   }
 
  private:
-  size_t capacity_;
-  shared_ptr<Logger> log_;
   shared_ptr<BlockCacheImpl> cache_;
 };
-
-
 
 }  // namespace rocksdb

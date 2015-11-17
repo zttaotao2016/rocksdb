@@ -55,6 +55,8 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
 
   // pre-condition
   assert(block);
+  assert(block->data());
+  assert(block->size());
   assert(deleter);
 
   // allocate
@@ -76,25 +78,53 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
   return obj;
 }
 
-Cache::Handle* VolatileCache::Lookup(const Slice& key) {
-  ReadLock _(&rwlock_);
+static void DeleteBlock(const Slice&, void* data) {
+  Block* block = (Block*) data;
+  delete block;
+}
 
-  // lookup in cache
-  CacheObject lookup_key(key);
-  CacheObject* obj;
-  bool status = index_.Find(&lookup_key, &obj);
-  assert(status);
-  if (!status) {
-    return nullptr;
+#include <iostream>
+Cache::Handle* VolatileCache::Lookup(const Slice& key) {
+  CacheObject* obj = nullptr;
+
+  {
+    ReadLock _(&rwlock_);
+
+    // lookup in cache
+    CacheObject lookup_key(key);
+    bool status = index_.Find(&lookup_key, &obj);
+    if (status) {
+      // inc ref
+      ++obj->refs_;
+      // Touch in LRU
+      lru_list_.Touch(obj);
+      return obj;
+    }
+
+    // data is not found
+    assert(!status);
   }
 
-  // inc ref
-  ++obj->refs_;
+  if (!obj && next_tier_) {
+    // lookup in the secondary cache;
+    std::unique_ptr<char[]> data;
+    uint32_t size;
+    if (!next_tier_->Lookup(key, &data, &size)) {
+      // data is not there in the secondary tier
+      return nullptr;
+    }
 
-  // Touch in LRU
-  lru_list_.Touch(obj);
+    assert(data);
+    assert(size);
 
-  return obj;
+    // Insert the data to the primary cache and return result
+    Block *block = Block::NewBlock(std::move(data), size);
+    assert(block);
+    assert(block->size() == size);
+    return InsertBlock(key, block, &DeleteBlock);
+  }
+
+  return nullptr;
 }
 
 void VolatileCache::Erase(const Slice& key) {
@@ -159,7 +189,19 @@ bool VolatileCache::Evict() {
 
   CacheObject* ret = EraseFromIndex(obj->Key());
   assert(ret == obj);
-  lru_list_.Unlink(obj);
+
+  if (next_tier_ && obj->Serializable()) {
+    Block* block = (Block*) obj->Value();
+    assert(block);
+    if (!next_tier_->LookupKey(obj->Key())) {
+      // insert only if the key does not already exists
+      // This scenario can manifest since we insert to volatile cache after
+      // reading from secondary cache
+      next_tier_->Insert(obj->Key(), (void*) block->data(), block->size());
+    }
+  }
+
+  size_ -= obj->Size();
   delete obj;
 
   return true;
