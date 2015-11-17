@@ -4,11 +4,12 @@
 
 #include "include/rocksdb/cache.h"
 #include "cache/blkcache_lrulist.h"
+#include "cache/cache_tier.h"
 #include "cache/hash_table.h"
 
 namespace rocksdb {
 
-class VolatileCache : public Cache {
+class VolatileCache : public PrimaryCacheTier {
  public:
   VolatileCache(const size_t max_size = UINT64_MAX)
     : max_size_(max_size),

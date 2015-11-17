@@ -3,7 +3,6 @@
 #include "cache/blkcache.h"
 
 using namespace rocksdb;
-using std::unique_ptr;
 
 Status BlockCacheImpl::Open() {
   Status status;
@@ -46,17 +45,17 @@ Status BlockCacheImpl::Close() {
   return Status::OK();
 }
 
-Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint32_t size,
-                             LBA* lba) {
+Status BlockCacheImpl::Insert(const Slice& key, void* buf,
+                              const uint32_t size) {
   // pre-condition
   assert(buf);
   assert(size);
-  assert(lba);
   assert(cacheFile_);
 
   WriteLock _(&lock_);
 
-  while (!cacheFile_->Append(key, Slice((char*) buf, size), lba)) {
+  LBA lba;
+  while (!cacheFile_->Append(key, Slice((char*) buf, size), &lba)) {
     if (!cacheFile_->Eof()) {
       Debug(log_, "Error inserting to cache file %d", cacheFile_->cacheid());
       return Status::TryAgain();
@@ -66,7 +65,7 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf, const uint32_t size,
     NewCacheFile();
   }
 
-  BlockInfo* info = new BlockInfo(key, *lba);
+  BlockInfo* info = new BlockInfo(key, lba);
   cacheFile_->Add(info);
   bool ok = metadata_.Insert(info);
   (void) ok;
@@ -111,6 +110,13 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   *size = blk_val.size();
 
   return true;
+}
+
+bool BlockCacheImpl::LookupKey(const Slice& key) {
+  ReadLock _(&lock_);
+
+  LBA lba;
+  return metadata_.Lookup(key, &lba);
 }
 
 bool BlockCacheImpl::Erase(const Slice& key) {
@@ -212,9 +218,7 @@ Cache::Handle* RocksBlockCache::InsertBlock(const Slice& key, Block* block,
   assert(block->compression_type() == kNoCompression);
   assert(block->size());
 
-  LBA lba;
-  if (!cache_->Insert(key, (void*) block->data(), block->size(), &lba).ok()) {
-    Info(log_, "Error inserting to cache. key=%s", key.ToString().c_str());
+  if (!cache_->Insert(key, (void*) block->data(), block->size()).ok()) {
     return nullptr;
   }
 
@@ -227,7 +231,6 @@ Cache::Handle* RocksBlockCache::Lookup(const Slice& key) {
   unique_ptr<char[]> data;
   uint32_t size;
   if (!cache_->Lookup(key, &data, &size)) {
-    Info(log_, "Error looking up key %s", key.ToString().c_str());
     return nullptr;
   }
 

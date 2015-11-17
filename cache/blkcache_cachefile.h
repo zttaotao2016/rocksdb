@@ -6,7 +6,7 @@
 
 #include "cache/blkcache_buffer.h"
 #include "cache/blkcache_lrulist.h"
-#include "cache/persistent_blkcache.h"
+#include "cache/cache_tier.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"
@@ -36,7 +36,7 @@ class BlockInfo;
 class Writer {
  public:
 
-  Writer(PersistentBlockCache* const cache)
+  Writer(SecondaryCacheTier* const cache)
     : cache_(cache) {
   }
   virtual ~Writer() {}
@@ -44,7 +44,7 @@ class Writer {
   virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) = 0;
   virtual void Stop() = 0;
 
-  PersistentBlockCache* const cache_;
+  SecondaryCacheTier* const cache_;
 };
 
 /**

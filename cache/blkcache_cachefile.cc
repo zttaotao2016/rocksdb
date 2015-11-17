@@ -1,4 +1,5 @@
 #include <memory>
+#include <iostream>
 
 #include "util/crc32c.h"
 #include "cache/blkcache_cachefile.h"

@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "cache/persistent_blkcache.h"
+#include "cache/cache_tier.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"

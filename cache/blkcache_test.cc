@@ -119,6 +119,20 @@ class BlockCacheImplTest : public testing::Test {
   }
 
  protected:
+  std::shared_ptr<TieredCache> NewTieredCache() {
+    auto* p = new VolatileCache(10 * 4096);
+    auto pcache = std::unique_ptr<PrimaryCacheTier>(p);
+
+    BlockCacheImpl::Options opt;
+    opt.path = path_;
+    auto logfile = opt.path + "/test.log";
+    opt.info_log = std::shared_ptr<Logger>(new ConsoleLogger());
+    auto* s = new BlockCacheImpl(env_, opt);
+    assert(s->Open().ok());
+    auto scache = std::unique_ptr<SecondaryCacheTier>(s);
+    return std::shared_ptr<TieredCache>(
+            new TieredCache(std::move(pcache), std::move(scache)));
+  }
 
   std::string PaddedNumber(const size_t data, const size_t pad_size) {
     assert(pad_size);
@@ -169,7 +183,6 @@ class BlockCacheImplTest : public testing::Test {
   }
 
   void Insert() {
-    BlockCacheImpl::LBA lba;
     const string prefix = "key_prefix_";
 
     while (true) {
@@ -182,7 +195,7 @@ class BlockCacheImplTest : public testing::Test {
       memset(data, '0' + (i % 10), sizeof(data));
       auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
-      while(!cache_->Insert(key, data, sizeof(data), &lba).ok()) {
+      while(!cache_->Insert(key, data, sizeof(data)).ok()) {
         sleep(1);
       }
     }
@@ -247,8 +260,9 @@ class BlockCacheImplTest : public testing::Test {
       Slice block_key(k);
       Cache::Handle* h = block_cache_->Lookup(block_key);
       ASSERT_TRUE(h);
+      ASSERT_TRUE(block_cache_->Value(h));
       Block* block = (Block*) block_cache_->Value(h);
-      ASSERT_TRUE(block->size() == block_template.size());
+      ASSERT_EQ(block->size(), block_template.size());
       ASSERT_TRUE(memcmp(block->data(), block_template.data(),
                          block->size()) == 0);
       block_cache_->Release(h);
@@ -302,6 +316,14 @@ TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert) {
   VerifyBlocks();
 }
 
+TEST_F(BlockCacheImplTest, TieredCacheBlockInsert) {
+  auto tcache = NewTieredCache();
+  block_cache_ = tcache->GetCache();
+  const size_t max_keys = 10 * 1024;
+  InsertBlocks(/*nthreads=*/ 1, max_keys);
+  VerifyBlocks();
+}
+
 TEST_F(BlockCacheImplTest, InsertWithEviction) {
   Create(/*max_file_size=*/ 12 * 1024 * 1024,
          /*max_size=*/ 200 * 1024 * 1024);
@@ -345,124 +367,161 @@ TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
   Verify(/*relaxed=*/ true);
 }
 
-class BlkcacheDBTest : public DBTestBase {
- public:
-  BlkcacheDBTest() : DBTestBase("/cache_test") {}
-
-  shared_ptr<Cache> NewBlkCache() {
-    return shared_ptr<Cache>(
-      new RocksBlockCache(Env::Default(),  test::TmpDir(env_) + "/"));
-  }
-};
-
 static long TestGetTickerCount(const Options& options, Tickers ticker_type) {
   return options.statistics->getTickerCount(ticker_type);
 }
 
-TEST_F(BlkcacheDBTest, SimpleCacheTest) {
-  if (!Snappy_Supported()) {
-    return;
+class BlkCacheDBTest : public DBTestBase {
+ public:
+  BlkCacheDBTest() : DBTestBase("/cache_test") {}
+
+  void InitTieredCache() {
+    auto* p = new VolatileCache(10 * 4096);
+    auto pcache = std::unique_ptr<PrimaryCacheTier>(p);
+
+    BlockCacheImpl::Options opt;
+    opt.path = dbname_;
+    auto logfile = dbname_ + "/test.log";
+    opt.info_log = std::unique_ptr<Logger>(new ConsoleLogger());
+    auto* s = new BlockCacheImpl(env_, opt);
+    assert(s->Open().ok());
+    auto scache = std::unique_ptr<SecondaryCacheTier>(s);
+    tcache_.reset(new TieredCache(std::move(pcache), std::move(scache)));
   }
-  int num_iter = 10 * 1024;
 
-  // Run this test three iterations.
-  // Iteration 1: only a uncompressed block cache
-  // Iteration 2: only a compressed block cache
-  // Iteration 3: both block cache and compressed cache
-  // Iteration 4: both block cache and compressed cache, but DB is not
-  // compressed
-  for (int iter = 0; iter < 3; iter++) {
-    Options options;
-    options.write_buffer_size = 64*1024;        // small write buffer
-    options.statistics = rocksdb::CreateDBStatistics();
-    options = CurrentOptions(options);
+  static shared_ptr<Cache> NewRocksBlockCache(BlkCacheDBTest* self) {
+    return shared_ptr<Cache>(
+      new RocksBlockCache(Env::Default(),  test::TmpDir(self->env_) + "/"));
+  }
 
-    BlockBasedTableOptions table_options;
-    switch (iter) {
-      case 0:
-        // only uncompressed block cache
-        table_options.block_cache = NewBlkCache();
-        table_options.block_cache_compressed = nullptr;
-        options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-        break;
-      case 1:
-        // both compressed and uncompressed block cache
-        table_options.block_cache = NewBlkCache();
-        table_options.block_cache_compressed = NewLRUCache(8*1024);
-        options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-        break;
-      case 2:
-        // both block cache and compressed cache, but DB is not compressed
-        // also, make block cache sizes bigger, to trigger block cache hits
-        table_options.block_cache = NewBlkCache();
-        table_options.block_cache_compressed = NewLRUCache(8 * 1024 * 1024);
-        options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-        options.compression = kNoCompression;
-        break;
-      default:
-        ASSERT_TRUE(false);
+  static shared_ptr<Cache> NewVolatileCache(BlkCacheDBTest*) {
+    return shared_ptr<Cache>(new VolatileCache());
+  }
+
+  static shared_ptr<Cache> NewTieredCache(BlkCacheDBTest* self) {
+    self->InitTieredCache();
+    return self->tcache_->GetCache();
+  }
+
+  void RunTest(shared_ptr<Cache> (*NewBlkCache)(BlkCacheDBTest*)) {
+    if (!Snappy_Supported()) {
+      return;
     }
-    CreateAndReopenWithCF({"pikachu"}, options);
-    // default column family doesn't have block cache
-    Options no_block_cache_opts;
-    no_block_cache_opts.statistics = options.statistics;
-    no_block_cache_opts = CurrentOptions(no_block_cache_opts);
-    BlockBasedTableOptions table_options_no_bc;
-    table_options_no_bc.no_block_cache = true;
-    no_block_cache_opts.table_factory.reset(
-        NewBlockBasedTableFactory(table_options_no_bc));
-    ReopenWithColumnFamilies({"default", "pikachu"},
-        std::vector<Options>({no_block_cache_opts, options}));
+    int num_iter = 100 * 1024;
 
-    Random rnd(301);
+    // Run this test three iterations.
+    // Iteration 1: only a uncompressed block cache
+    // Iteration 2: only a compressed block cache
+    // Iteration 3: both block cache and compressed cache
+    // Iteration 4: both block cache and compressed cache, but DB is not
+    // compressed
+    for (int iter = 0; iter < 3; iter++) {
+      Options options;
+      options.write_buffer_size = 64*1024;        // small write buffer
+      options.statistics = rocksdb::CreateDBStatistics();
+      options = CurrentOptions(options);
 
-    // Write 8MB (80 values, each 100K)
-    ASSERT_EQ(NumTableFilesAtLevel(0, 1), 0);
-    std::vector<std::string> values;
-    std::string str;
-    for (int i = 0; i < num_iter; i++) {
-      if (i % 4 == 0) {        // high compression ratio
-        str = RandomString(&rnd, 1000);
+      BlockBasedTableOptions table_options;
+      switch (iter) {
+        case 0:
+          // only uncompressed block cache
+          table_options.block_cache = (*NewBlkCache)(this);
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 1:
+          // both compressed and uncompressed block cache
+          table_options.block_cache = (*NewBlkCache)(this);
+          table_options.block_cache_compressed = NewLRUCache(8*1024);
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 2:
+          // both block cache and compressed cache, but DB is not compressed
+          // also, make block cache sizes bigger, to trigger block cache hits
+          table_options.block_cache = (*NewBlkCache)(this);
+          table_options.block_cache_compressed = NewLRUCache(8 * 1024 * 1024);
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          options.compression = kNoCompression;
+          break;
+        default:
+          ASSERT_TRUE(false);
       }
-      values.push_back(str);
-      ASSERT_OK(Put(1, Key(i), values[i]));
+      CreateAndReopenWithCF({"pikachu"}, options);
+      // default column family doesn't have block cache
+      Options no_block_cache_opts;
+      no_block_cache_opts.statistics = options.statistics;
+      no_block_cache_opts = CurrentOptions(no_block_cache_opts);
+      BlockBasedTableOptions table_options_no_bc;
+      table_options_no_bc.no_block_cache = true;
+      no_block_cache_opts.table_factory.reset(
+          NewBlockBasedTableFactory(table_options_no_bc));
+      ReopenWithColumnFamilies({"default", "pikachu"},
+          std::vector<Options>({no_block_cache_opts, options}));
+
+      Random rnd(301);
+
+      // Write 8MB (80 values, each 100K)
+      ASSERT_EQ(NumTableFilesAtLevel(0, 1), 0);
+      std::vector<std::string> values;
+      std::string str;
+      for (int i = 0; i < num_iter; i++) {
+        if (i % 4 == 0) {        // high compression ratio
+          str = RandomString(&rnd, 1000);
+        }
+        values.push_back(str);
+        ASSERT_OK(Put(1, Key(i), values[i]));
+      }
+
+      // flush all data from memtable so that reads are from block cache
+      ASSERT_OK(Flush(1));
+
+      for (int i = 0; i < num_iter; i++) {
+        ASSERT_EQ(Get(1, Key(i)), values[i]);
+      }
+
+      // check that we triggered the appropriate code paths in the cache
+      switch (iter) {
+        case 0:
+          // only uncompressed block cache
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          break;
+        case 1:
+          // both compressed and uncompressed block cache
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          break;
+        case 2:
+          // both compressed and uncompressed block cache
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_HIT), 0);
+          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          // compressed doesn't have any hits since blocks are not compressed on
+          // storage
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
+          break;
+        default:
+          ASSERT_TRUE(false);
+      }
+
+      options.create_if_missing = true;
+      DestroyAndReopen(options);
     }
-
-    // flush all data from memtable so that reads are from block cache
-    ASSERT_OK(Flush(1));
-
-    for (int i = 0; i < num_iter; i++) {
-      ASSERT_EQ(Get(1, Key(i)), values[i]);
-    }
-
-    // check that we triggered the appropriate code paths in the cache
-    switch (iter) {
-      case 0:
-        // only uncompressed block cache
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-        ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-        break;
-      case 1:
-        // both compressed and uncompressed block cache
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-        break;
-      case 2:
-        // both compressed and uncompressed block cache
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_HIT), 0);
-        ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-        // compressed doesn't have any hits since blocks are not compressed on
-        // storage
-        ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
-        break;
-      default:
-        ASSERT_TRUE(false);
-    }
-
-    options.create_if_missing = true;
-    DestroyAndReopen(options);
   }
+
+  std::shared_ptr<TieredCache> tcache_;
+};
+
+TEST_F(BlkCacheDBTest, BlockCacheTest) {
+  RunTest(&NewRocksBlockCache);
+}
+
+TEST_F(BlkCacheDBTest, VolatileCacheTest) {
+  RunTest(&NewVolatileCache);
+}
+
+TEST_F(BlkCacheDBTest, TieredCacheTest) {
+  RunTest(&NewTieredCache);
 }
 
 }  // namespace rocksdb
