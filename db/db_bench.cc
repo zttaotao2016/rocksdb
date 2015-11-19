@@ -40,6 +40,8 @@ int main() {
 #include <mutex>
 #include <thread>
 
+#include "cache/cache_tier.h"
+#include "cache/blkcache.h"
 #include "db/db_impl.h"
 #include "db/version_set.h"
 #include "rocksdb/options.h"
@@ -523,6 +525,15 @@ DEFINE_uint64(transaction_lock_timeout, 100,
 
 DEFINE_bool(compaction_measure_io_stats, false,
             "Measure times spents on I/Os while in compactions. ");
+
+// Tiered cache related changes
+DEFINE_bool(enable_tiered_block_cache, false,
+            "Use tiered block caching instead of in-memory caching");
+
+DEFINE_string(block_cache_path, "/tmp/cache",
+              "Path to store the block cache data");
+
+DEFINE_uint64(block_cache_size, UINT64_MAX, "Block cache size");
 
 namespace {
 enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {
@@ -1689,13 +1700,8 @@ class Benchmark {
   }
 
  public:
-  Benchmark()
-      : cache_(
-            FLAGS_cache_size >= 0
-                ? (FLAGS_cache_numshardbits >= 1
-                       ? NewLRUCache(FLAGS_cache_size, FLAGS_cache_numshardbits)
-                       : NewLRUCache(FLAGS_cache_size))
-                : nullptr),
+  Benchmark(std::shared_ptr<Cache>& cache)
+      : cache_(cache),
         compressed_cache_(FLAGS_compressed_cache_size >= 0
                               ? (FLAGS_cache_numshardbits >= 1
                                      ? NewLRUCache(FLAGS_compressed_cache_size,
@@ -4064,7 +4070,27 @@ int main(int argc, char** argv) {
     FLAGS_stats_interval = 1000;
   }
 
-  rocksdb::Benchmark benchmark;
+  std::shared_ptr<rocksdb::TieredCache> tcache;
+  std::shared_ptr<rocksdb::Cache> cache;
+  if (FLAGS_cache_size >= 0) {
+    if (FLAGS_enable_tiered_block_cache) {
+      std::shared_ptr<rocksdb::Logger> log;
+      rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_block_cache_path
+                                                          + "/LOG", &log);
+      assert(s.ok());
+      rocksdb::BlockCacheOptions opt(FLAGS_env, FLAGS_block_cache_path,
+                                     FLAGS_block_cache_size, log);
+      s = rocksdb::TieredCache::NewTieredCache(FLAGS_cache_size, opt, &tcache);
+      assert(s.ok());
+      cache = tcache->GetCache();
+    } else if (FLAGS_cache_numshardbits >= 1) {
+      cache = rocksdb::NewLRUCache(FLAGS_cache_size, FLAGS_cache_numshardbits);
+    } else {
+      cache = rocksdb::NewLRUCache(FLAGS_cache_size);
+    }
+  }
+
+  rocksdb::Benchmark benchmark(cache);
   benchmark.Run();
   return 0;
 }

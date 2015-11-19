@@ -32,7 +32,6 @@ class VolatileCache : public PrimaryCacheTier {
   void* Value(Handle* handle) override;
   void Erase(const Slice& key) override;
 
-  uint64_t NewId() override { return (uint64_t) this; }
   void SetCapacity(size_t capacity) override { max_size_ = capacity; }
   size_t GetCapacity() const override { return size_; }
 
@@ -43,6 +42,10 @@ class VolatileCache : public PrimaryCacheTier {
   /*
    * Not implemented
    */
+  uint64_t NewId() override {
+    assert(!"not supported");
+    throw std::runtime_error("not supported");
+  }
   size_t GetUsage() const override {
     throw std::runtime_error("not implemented");
   }

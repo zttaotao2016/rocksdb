@@ -345,6 +345,7 @@ bool WriteableCacheFile::ExpandBuffer(const size_t size) {
 
 void WriteableCacheFile::DispatchBuffer() {
   rwlock_.AssertHeld();
+
   if (is_io_pending_ || bufs_.empty()) {
     // IO is in progress or there is nothing to write
     return;

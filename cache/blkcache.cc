@@ -4,6 +4,9 @@
 
 using namespace rocksdb;
 
+//
+// BlockCacheImpl
+//
 Status BlockCacheImpl::Open() {
   Status status;
 
@@ -14,9 +17,9 @@ Status BlockCacheImpl::Open() {
   //
   // Create directory
   //
-  status = env_->CreateDirIfMissing(opt_.path);
+  status = opt_.env->CreateDirIfMissing(opt_.path);
   if (!status.ok()) {
-    Error(opt_.info_log, "Error creating directory %s. %s", opt_.path.c_str(),
+    Error(opt_.log, "Error creating directory %s. %s", opt_.path.c_str(),
           status.ToString().c_str());
     return status;
   }
@@ -24,14 +27,14 @@ Status BlockCacheImpl::Open() {
   //
   // Create directory
   //
-  status = env_->CreateDirIfMissing(GetCachePath());
+  status = opt_.env->CreateDirIfMissing(GetCachePath());
   if (!status.ok()) {
-    Error(opt_.info_log, "Error creating directory %s. %s",
+    Error(opt_.log, "Error creating directory %s. %s",
           GetCachePath().c_str(), status.ToString().c_str());
     return status;
   }
 
-  Info(opt_.info_log, "Resetting directory %s", opt_.path.c_str());
+  Info(opt_.log, "Resetting directory %s", opt_.path.c_str());
 
   assert(!cacheFile_);
   NewCacheFile();
@@ -55,9 +58,14 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf,
   WriteLock _(&lock_);
 
   LBA lba;
+  if (metadata_.Lookup(key, &lba)) {
+    // the key already exisits, this is duplicate insert
+    return Status::OK();
+  }
+
   while (!cacheFile_->Append(key, Slice((char*) buf, size), &lba)) {
     if (!cacheFile_->Eof()) {
-      Debug(log_, "Error inserting to cache file %d", cacheFile_->cacheid());
+      Debug(opt_.log, "Error inserting to cache file %d", cacheFile_->cacheid());
       return Status::TryAgain();
     }
 
@@ -67,9 +75,9 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf,
 
   BlockInfo* info = new BlockInfo(key, lba);
   cacheFile_->Add(info);
-  bool ok = metadata_.Insert(info);
-  (void) ok;
-  assert(ok);
+  bool status = metadata_.Insert(info);
+  (void) status;
+  assert(status);
 
   return Status::OK();
 }
@@ -82,14 +90,14 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   LBA lba;
   bool status = metadata_.Lookup(key, &lba);
   if (!status) {
-    Info(log_, "Error looking up index for key %s", key.ToString().c_str());
+    Info(opt_.log, "Error looking up index for key %s", key.ToString().c_str());
     return status;
   }
 
   BlockCacheFile* const file = metadata_.Lookup(lba.cache_id_);
   assert(file);
   if (!file) {
-    Error(log_, "Error looking up cache file %d", lba.cache_id_);
+    Error(opt_.log, "Error looking up cache file %d", lba.cache_id_);
     return false;
   }
 
@@ -98,7 +106,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   Slice blk_val;
   if (!file->Read(lba, &blk_key, &blk_val, scratch.get())) {
     assert(!"Unexpected error looking up cache");
-    Error(log_, "Error looking up cache %d key %s", file->cacheid(),
+    Error(opt_.log, "Error looking up cache %d key %s", file->cacheid(),
           key.ToString().c_str());
     return false;
   }
@@ -130,13 +138,13 @@ bool BlockCacheImpl::Erase(const Slice& key) {
 void BlockCacheImpl::NewCacheFile() {
   lock_.AssertHeld();
 
-  Info(log_, "Creating cache file %d", writerCacheId_);
+  Info(opt_.log, "Creating cache file %d", writerCacheId_);
 
   writerCacheId_++;
 
-  cacheFile_ = new WriteableCacheFile(env_, bufferAllocator_, writer_,
+  cacheFile_ = new WriteableCacheFile(opt_.env, bufferAllocator_, writer_,
                                       GetCachePath(), writerCacheId_,
-                                      opt_.maxCacheFileSize, log_);
+                                      opt_.cache_file_size, opt_.log);
   assert(cacheFile_->Create());
 
   // insert to cache files tree
@@ -147,19 +155,19 @@ void BlockCacheImpl::NewCacheFile() {
 
 bool BlockCacheImpl::Reserve(const size_t size) {
   WriteLock _(&lock_);
-  assert(size_ <= opt_.max_size_);
+  assert(size_ <= opt_.cache_size);
 
-  if (size + size_ <= opt_.max_size_) {
+  if (size + size_ <= opt_.cache_size) {
     // there is enough space to write
     size_ += size;
     return true;
   }
 
-  assert(size + size_ >= opt_.max_size_);
+  assert(size + size_ >= opt_.cache_size);
   // there is not enough space to fit the requested data
   // we can clear some space by evicting cold data
 
-  while (size + size_ > opt_.max_size_ * 0.9) {
+  while (size + size_ > opt_.cache_size * 0.9) {
     unique_ptr<BlockCacheFile> f(metadata_.Evict());
     if (!f) {
       // nothing is evictable
@@ -177,7 +185,7 @@ bool BlockCacheImpl::Reserve(const size_t size) {
   }
 
   size_ += size;
-  assert(size_ <= opt_.max_size_ * 0.9);
+  assert(size_ <= opt_.cache_size * 0.9);
   return true;
 }
 
@@ -189,12 +197,11 @@ RocksBlockCache::RocksBlockCache(const std::shared_ptr<BlockCacheImpl>& impl) {
 }
 
 RocksBlockCache::RocksBlockCache(Env* env, const std::string path) {
-  BlockCacheImpl::Options opt;
-
-  env->NewLogger(path + "/cache.log", &opt.info_log);
-  opt.path = path;
-
-  cache_.reset(new BlockCacheImpl(env, opt));
+  std::shared_ptr<Logger> log;
+  Status s = env->NewLogger(path + "/cache.log", &log);
+  assert(s.ok());
+  BlockCacheOptions opt(env, path, /*size=*/ UINT64_MAX, log);
+  cache_.reset(new BlockCacheImpl(opt));
   assert(cache_->Open().ok());
 }
 

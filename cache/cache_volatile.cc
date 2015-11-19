@@ -2,6 +2,9 @@
 
 using namespace rocksdb;
 
+//
+// VolatileCache implementation
+//
 VolatileCache::~VolatileCache() {
   WriteLock _(&rwlock_);
   // TODO: Super ugly way to clear data, find a better way
@@ -26,7 +29,17 @@ Cache::Handle* VolatileCache::Insert(const Slice& key, void* value,
   assert(deleter);
 
   // allocate
-  CacheObject* obj = new PtrRef(key, value, charge, deleter);
+  CacheObject lookup_key(key);
+  CacheObject* obj;
+  if (index_.Find(&lookup_key, &obj)) {
+    // key already exists in the system
+    assert(obj->Size() == charge);
+    assert(memcmp(obj->Value(), value, obj->Size()) == 0);
+    ++obj->refs_;
+    return obj;
+  }
+
+  obj = new PtrRef(key, value, charge, deleter);
   assert(obj);
 
   // inc ref count
@@ -53,6 +66,17 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
     Evict();
   }
 
+  // allocate
+  CacheObject lookup_key(key);
+  CacheObject* obj = nullptr;
+  if (index_.Find(&lookup_key, &obj)) {
+    // key already exists in the system
+    assert(obj->Size() == block->size());
+    assert(memcmp(obj->Value(), block->data(), obj->Size()) == 0);
+    ++obj->refs_;
+    return obj;
+  }
+
   // pre-condition
   assert(block);
   assert(block->data());
@@ -60,7 +84,7 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
   assert(deleter);
 
   // allocate
-  CacheObject* obj = new BlockData(key, block, deleter);
+  obj = new BlockData(key, block, deleter);
   assert(obj);
 
   // inc ref
@@ -70,11 +94,10 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
   // insert order: LRU, followed by index
   lru_list_.Push(obj);
   bool status = index_.Insert(obj);
-  assert(status);
   (void) status;
+  assert(status);
 
   size_ += block->size();
-
   return obj;
 }
 
