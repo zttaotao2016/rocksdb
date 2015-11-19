@@ -5,6 +5,8 @@
 
 namespace rocksdb {
 
+class BlockCacheOptions;
+
 struct LogicalBlockAddress {
   LogicalBlockAddress() {}
   LogicalBlockAddress(const uint32_t cache_id, const uint32_t off,
@@ -39,6 +41,11 @@ class SecondaryCacheTier : public CacheTier {
   typedef LogicalBlockAddress LBA;
 
   virtual ~SecondaryCacheTier() {}
+
+  /**
+   * Create or open an existing cache
+   */
+  virtual Status Open() = 0;
 
   /**
    * Insert key value into the cache
@@ -105,6 +112,13 @@ class TieredCache {
   }
 
   std::shared_ptr<PrimaryCacheTier> GetCache() { return pcache_; }
+
+  /**
+   * Factory method for creating tiered cache
+   */
+  static Status NewTieredCache(const size_t mem_size,
+                               const BlockCacheOptions& options,
+                               std::shared_ptr<TieredCache>* tcache);
 
  private:
   std::shared_ptr<PrimaryCacheTier> pcache_;

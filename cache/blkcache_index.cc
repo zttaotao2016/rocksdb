@@ -3,8 +3,7 @@
 using namespace rocksdb;
 
 bool SimpleBlockLookupIndex::Insert(BlockInfo* binfo) {
-  index_.Insert(binfo);
-  return true;
+  return index_.Insert(binfo);
 }
 
 bool SimpleBlockLookupIndex::Lookup(const Slice& key, LBA* lba) {

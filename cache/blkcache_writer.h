@@ -77,7 +77,6 @@ class BlockingIOQueue : public IOQueue {
  */
 class ThreadedWriter : public Writer {
  public:
-
   ThreadedWriter(SecondaryCacheTier* const cache, Env* const env,
                  const size_t qdepth = 1)
       : Writer(cache),
@@ -112,7 +111,6 @@ class ThreadedWriter : public Writer {
   }
 
  private:
-
   static void IOMain(void* arg) {
     auto* self = (ThreadedWriter*) arg;
     while (true) {
@@ -122,6 +120,7 @@ class ThreadedWriter : public Writer {
         // that's secret signal to exit
         break;
       }
+
 
       WriteableCacheFile* const f = io->file_;
       CacheWriteBuffer* const buf = io->buf_;

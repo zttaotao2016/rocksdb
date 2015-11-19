@@ -46,21 +46,10 @@ class BlockCacheImplTest : public testing::Test {
 
   void Create(const uint32_t max_file_size = 12 * 1024 * 1024,
               const uint64_t max_size = UINT64_MAX) {
-    Status s;
-    BlockCacheImpl::Options opt;
-
-    opt.writeBufferSize = 1 * 1024 * 1024;
-    opt.writeBufferCount = 100;
-    opt.maxCacheFileSize =  max_file_size;
-    opt.max_bufferpool_size_ = opt.writeBufferSize * opt.writeBufferCount;
-    opt.max_size_ = max_size;
-
-    opt.path = path_;
-    auto logfile = path_ + "/test.log";
     log_.reset(new ConsoleLogger());
-    // env_->NewLogger(logfile, &log_);
-    opt.info_log = log_;
-    assert(s.ok());
+
+    BlockCacheOptions opt(env_, path_, max_size, log_);
+    opt.cache_file_size = max_file_size;
 
     Log(InfoLogLevel::INFO_LEVEL, log_, "Test output directory %s",
         opt.path.c_str());
@@ -69,8 +58,8 @@ class BlockCacheImplTest : public testing::Test {
       cache_->Close();
     }
 
-    cache_.reset(new BlockCacheImpl(env_, opt));
-    s = cache_->Open();
+    cache_.reset(new BlockCacheImpl(opt));
+    Status s = cache_->Open();
     assert(s.ok());
   }
 
@@ -120,15 +109,15 @@ class BlockCacheImplTest : public testing::Test {
 
  protected:
   std::shared_ptr<TieredCache> NewTieredCache() {
+    // create primary cache
     auto* p = new VolatileCache(10 * 4096);
     auto pcache = std::unique_ptr<PrimaryCacheTier>(p);
-
-    BlockCacheImpl::Options opt;
-    opt.path = path_;
-    auto logfile = opt.path + "/test.log";
-    opt.info_log = std::shared_ptr<Logger>(new ConsoleLogger());
-    auto* s = new BlockCacheImpl(env_, opt);
+    // create secondary cache
+    std::shared_ptr<Logger> log(new ConsoleLogger());
+    BlockCacheOptions opt(env_, path_, /*size=*/ UINT64_MAX, log);
+    auto* s = new BlockCacheImpl(opt);
     assert(s->Open().ok());
+    // create tier out of the two caches
     auto scache = std::unique_ptr<SecondaryCacheTier>(s);
     return std::shared_ptr<TieredCache>(
             new TieredCache(std::move(pcache), std::move(scache)));
@@ -376,15 +365,15 @@ class BlkCacheDBTest : public DBTestBase {
   BlkCacheDBTest() : DBTestBase("/cache_test") {}
 
   void InitTieredCache() {
+    // create primary cache
     auto* p = new VolatileCache(10 * 4096);
     auto pcache = std::unique_ptr<PrimaryCacheTier>(p);
-
-    BlockCacheImpl::Options opt;
-    opt.path = dbname_;
-    auto logfile = dbname_ + "/test.log";
-    opt.info_log = std::unique_ptr<Logger>(new ConsoleLogger());
-    auto* s = new BlockCacheImpl(env_, opt);
+    // create secondary cache
+    auto log = std::shared_ptr<Logger>(new ConsoleLogger());
+    BlockCacheOptions opt(env_, dbname_, /*size=*/ UINT64_MAX, log);
+    auto* s = new BlockCacheImpl(opt);
     assert(s->Open().ok());
+    // create a tier out of the two caches
     auto scache = std::unique_ptr<SecondaryCacheTier>(s);
     tcache_.reset(new TieredCache(std::move(pcache), std::move(scache)));
   }

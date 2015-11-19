@@ -22,35 +22,95 @@
 namespace rocksdb {
 
 /**
+ * BlockCache options
+ */
+struct BlockCacheOptions {
+  BlockCacheOptions(Env* const _env, const std::string& _path,
+                    const uint64_t _cache_size,
+                    const std::shared_ptr<Logger>& _log) {
+    env = _env;
+    path = _path;
+    log = _log;
+    cache_size = _cache_size;
+    cache_file_size = 100ULL * 1024 * 1024;
+    writer_qdepth = 2;
+    write_buffer_size = 1 * 1024 * 1024;
+    write_buffer_count = 200;
+    bufferpool_limit = 2ULL * write_buffer_size * write_buffer_count;
+  }
+
+  /**
+   * Env abstraction to use for systmer level operations
+   */
+  Env* env;
+
+  /**
+   * Path for the block cache where blocks are persisted
+   */
+  std::string path;
+
+  /**
+   * Log handle for logging messages
+   */
+  std::shared_ptr<Logger> log;
+
+  /**
+   * Logical cache size
+   */
+  uint64_t cache_size = UINT64_MAX;
+
+  /**
+   * Cache consists of multiples of small files. This is the size of individual
+   * cache file
+   *
+   * default: 1M
+   */
+  uint64_t cache_file_size = 100ULL * 1024 * 1024;
+
+  /**
+   * The writers can issues IO to the devices in parallel. This parameter
+   * controls the qdepth to use for a given block device
+   */
+  uint32_t writer_qdepth = 1;
+
+  /**
+   * IO size to block device
+   */
+  uint32_t write_buffer_size = 1 * 1024 * 1024;
+
+  /**
+   * Number of buffers to pool
+   * (should be greater than cache file size)
+   */
+  uint32_t write_buffer_count = 200;
+
+  /**
+   * Buffer poll limit to which it can grow
+   */
+  uint64_t bufferpool_limit = 2ULL * cache_file_size;
+
+  BlockCacheOptions MakeBlockCacheOptions(const std::string& path,
+                                          const uint64_t size,
+                                          const std::shared_ptr<Logger>& lg);
+};
+
+/**
  * Block cache implementation
  */
 class BlockCacheImpl : public SecondaryCacheTier {
  public:
-  struct Options {
-    std::string path;
-    std::shared_ptr<Logger> info_log;
-    uint32_t writeBufferSize = 1 * 1024 * 1024;
-    uint32_t writeBufferCount = 10;
-    uint64_t max_bufferpool_size_ = 2ULL * writeBufferSize * writeBufferCount;
-    uint64_t maxCacheFileSize = 2ULL * 1024 * 1024;
-    uint32_t writer_qdepth_ = 2;
-    uint64_t max_size_ = UINT64_MAX;
-  };
-
-  BlockCacheImpl(Env* env, const Options& opt)
-      : env_(env),
-        opt_(opt),
+  BlockCacheImpl(const BlockCacheOptions& opt)
+      : opt_(opt),
         writerCacheId_(0),
         cacheFile_(nullptr),
-        writer_(this, env_, opt_.writer_qdepth_),
-        log_(opt.info_log),
+        writer_(this, opt.env, opt_.writer_qdepth),
         size_(0) {
-    Info(log_, "Initializing allocator. size=%d B count=%d limit=%d B",
-         opt_.writeBufferSize, opt_.writeBufferCount,
-         opt_.max_bufferpool_size_);
+    Info(opt_.log, "Initializing allocator. size=%d B count=%d limit=%d B",
+         opt_.write_buffer_size, opt_.write_buffer_count,
+         opt_.bufferpool_limit);
 
-    bufferAllocator_.Init(opt.writeBufferSize, opt.writeBufferCount,
-                          opt.max_bufferpool_size_);
+    bufferAllocator_.Init(opt.write_buffer_size, opt.write_buffer_count,
+                          opt.bufferpool_limit);
   }
 
   virtual ~BlockCacheImpl() {}
@@ -75,15 +135,13 @@ class BlockCacheImpl : public SecondaryCacheTier {
   // Get cache directory path
   std::string GetCachePath() const { return opt_.path + "/cache"; }
 
-  port::RWMutex lock_;            // Synchronization
-  Env* const env_;                // Env
-  const Options opt_;             // BlockCache options
-  uint32_t writerCacheId_;        // Current cache file identifier (auto inc)
-  WriteableCacheFile* cacheFile_; // Current cache file reference
+  port::RWMutex lock_;                  // Synchronization
+  const BlockCacheOptions opt_;         // BlockCache options
+  uint32_t writerCacheId_;              // Current cache file identifier
+  WriteableCacheFile* cacheFile_;       // Current cache file reference
   CacheWriteBufferAllocator bufferAllocator_; // Buffer provider
   ThreadedWriter writer_;               // Writer threads
   SimpleBlockCacheMetadata metadata_;   // Cache meta data manager
-  std::shared_ptr<Logger> log_;         // logger
   std::atomic<uint64_t> size_;          // Size of the cache
 };
 

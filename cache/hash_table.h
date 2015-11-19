@@ -104,7 +104,7 @@ class HashTable {
     auto& bucket = buckets_[bucket_idx];
 
     // Check if the key already exists
-    auto it = Find(bucket.list_, t);
+    auto it = Find(bucket.list_, t) ;
     assert(it == bucket.list_.end());
     if (it != bucket.list_.end()) {
       return false;
