@@ -7,6 +7,17 @@
 namespace rocksdb {
 
 template<class T>
+class Evictable {
+ public:
+  virtual ~Evictable() {}
+
+  /**
+   * Evict one of the candidates as identified by the eviction policy
+   */
+  virtual T Evict() = 0;
+};
+
+template<class T>
 struct LRUElement
 {
   explicit LRUElement()
@@ -94,7 +105,6 @@ public:
   }
 
 private:
-
   void UnlinkImpl(T* const t) {
     lock_.AssertHeld();
     assert(t);
