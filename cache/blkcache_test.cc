@@ -248,6 +248,9 @@ class BlockCacheImplTest : public testing::Test {
       auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice block_key(k);
       Cache::Handle* h = block_cache_->Lookup(block_key);
+      if (!h && relaxed) {
+        continue;
+      }
       ASSERT_TRUE(h);
       ASSERT_TRUE(block_cache_->Value(h));
       Block* block = (Block*) block_cache_->Value(h);
@@ -321,6 +324,13 @@ TEST_F(BlockCacheImplTest, InsertWithEviction) {
   Verify(/*relaxed=*/ true);
 }
 
+TEST_F(BlockCacheImplTest, VolatileBlockInsertWithEviction) {
+  block_cache_ = std::make_shared<VolatileCache>(1 * 1024 * 1024);
+  const size_t max_keys = 10 * 1024;
+  InsertBlocks(/*nthreads=*/ 1, max_keys);
+  VerifyBlocks(/*relaxed=*/ true);
+}
+
 TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
   const size_t max_keys = 5 * 10 * 1024;
   Insert(/*nthreads=*/ 5, max_keys);
@@ -348,12 +358,33 @@ TEST_F(BlockCacheImplTest, Insert1M) {
   ThreadedVerify(/*nthreads=*/ 10);
 }
 
+TEST_F(BlockCacheImplTest, BlockInsert1M) {
+  block_cache_ = std::make_shared<RocksBlockCache>(cache_);
+  const size_t max_keys = 1 * 1024 * 1024;
+  InsertBlocks(/*nthreads=*/ 10, max_keys);
+  VerifyBlocks();
+}
+
+TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1M) {
+  block_cache_ = std::make_shared<VolatileCache>();
+  const size_t max_keys = 1 * 1024 * 1024;
+  InsertBlocks(/*nthreads=*/ 10, max_keys);
+  VerifyBlocks();
+}
+
 TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
   Create(/*max_file_size=*/ 12 * 1024 * 1024,
          /*max_size=*/ 1024 * 1024 * 1024);
   const size_t max_keys = 1024 * 1024;
-  Insert(/*nthreads=*/ 1, max_keys);
+  Insert(/*nthreads=*/ 10, max_keys);
   Verify(/*relaxed=*/ true);
+}
+
+TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1MWithEviction) {
+  block_cache_ = std::make_shared<VolatileCache>(/*size=*/ 16 * 1024);
+  const size_t max_keys = 1 * 1024 * 1024;
+  InsertBlocks(/*nthreads=*/ 10, max_keys);
+  VerifyBlocks(/*relaxed=*/ true);
 }
 
 static long TestGetTickerCount(const Options& options, Tickers ticker_type) {

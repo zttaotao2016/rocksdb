@@ -63,56 +63,46 @@ class HashTable {
  public:
   explicit HashTable(const size_t capacity = 1024 * 1024,
                      const float load_factor = 2.0,
-                     const size_t nlocks = 256) {
-    // initialize the spine
+                     const size_t nlocks = 256)
+    : nbuckets_(load_factor ? capacity / load_factor : 0),
+      nlocks_(nlocks) {
+    // pre-conditions
     assert(capacity);
     assert(load_factor);
-    nbuckets_ = capacity / load_factor;
-    buckets_ = new Bucket[nbuckets_];
-    assert(buckets_);
+    assert(nbuckets_);
+    assert(nlocks_);
+
+    buckets_.reset(new Bucket[nbuckets_]);
 #ifdef NDEBUG
     LockMem(buckets_, nbuckets_ * sizeof(Bucket));
 #endif
 
     // initialize locks
-    assert(nlocks);
-    nlocks_ = nlocks;
-    locks_ = new port::RWMutex[nlocks_];
-    assert(locks_);
+    locks_.reset(new port::RWMutex[nlocks_]);
 #ifdef NDEBUG
     LockMem(locks_, nlocks_ * sizeof(port::RWMutex));
 #endif
+
+    // post-conditions
+    assert(buckets_);
+    assert(locks_);
   }
 
   virtual ~HashTable() {
-    delete[] buckets_;
-    delete[] locks_;
+    AssertEmptyBuckets();
   }
 
   /**
    * Insert given record to hash table
    */
   bool Insert(const T& t) {
-    assert(nbuckets_);
-    assert(nlocks_);
-
     const uint64_t h = Hash()(t);
     const uint32_t bucket_idx = h % nbuckets_;
     const uint32_t lock_idx = bucket_idx % nlocks_;
 
     WriteLock _(&locks_[lock_idx]);
     auto& bucket = buckets_[bucket_idx];
-
-    // Check if the key already exists
-    auto it = Find(bucket.list_, t) ;
-    assert(it == bucket.list_.end());
-    if (it != bucket.list_.end()) {
-      return false;
-    }
-
-    // insert to bucket
-    bucket.list_.push_back(t);
-    return true;
+    return Insert(bucket, t);
   }
 
   /**
@@ -123,9 +113,6 @@ class HashTable {
    * operates on the data.
    */
   bool Find(const T& t, T* ret) {
-    assert(nbuckets_);
-    assert(nlocks_);
-
     const uint64_t h = Hash()(t);
     const uint32_t bucket_idx = h % nbuckets_;
     const uint32_t lock_idx = bucket_idx % nlocks_;
@@ -133,25 +120,13 @@ class HashTable {
     locks_[lock_idx].AssertHeld();
 
     auto& bucket = buckets_[bucket_idx];
-    auto it = Find(bucket.list_, t);
-    if (it == bucket.list_.end()) {
-      // not found in the bucket
-      return false;;
-    }
-
-    if (ret) {
-      *ret = *it;
-    }
-    return true;
+    return Find(bucket, t, ret);
   }
 
   /**
    * Erase a given key from the hash table
    */
   bool Erase(const T& t, T* ret) {
-    assert(nbuckets_);
-    assert(nlocks_);
-
     const uint64_t h = Hash()(t);
     const uint32_t bucket_idx = h % nbuckets_;
     const uint32_t lock_idx = bucket_idx % nlocks_;
@@ -159,17 +134,7 @@ class HashTable {
     WriteLock _(&locks_[lock_idx]);
 
     auto& bucket = buckets_[bucket_idx];
-    auto it = Find(bucket.list_, t);
-    if (it == bucket.list_.end()) {
-      // not found in the list
-      return false;;
-    }
-
-    if (ret) {
-      *ret = *it;
-    }
-    bucket.list_.erase(it);
-    return true;
+    return Erase(bucket, t, ret);
   }
 
   /**
@@ -178,9 +143,6 @@ class HashTable {
    * time.
    */
   port::RWMutex* GetMutex(const T& t) {
-    assert(nbuckets_);
-    assert(nlocks_);
-
     const uint64_t h = Hash()(t);
     const uint32_t bucket_idx = h % nbuckets_;
     const uint32_t lock_idx = bucket_idx % nlocks_;
@@ -195,10 +157,18 @@ class HashTable {
       for (auto& t : buckets_[i].list_) {
         (*fn)(t);
       }
+      buckets_[i].list_.clear();
     }
   }
 
- private:
+ protected:
+  /**
+   * Models bucket of keys that hash to the same bucket number
+   */
+  struct Bucket {
+    std::list<T> list_;
+  };
+
   // Substitute for std::find with custom comparator operator
   typename std::list<T>::const_iterator Find(const std::list<T>& list,
                                              const T& t) {
@@ -210,11 +180,6 @@ class HashTable {
     return list.end();
   }
 
-  // Models a bucket in the spine
-  struct Bucket {
-    std::list<T> list_;
-  };
-
 #ifdef NDEBUG
   void LockMem(void* const data, const size_t size) {
     int status = mlock(data, size);
@@ -224,10 +189,57 @@ class HashTable {
   }
 #endif
 
-  uint32_t nbuckets_;                   // No. of buckets in the spine
-  Bucket* buckets_;                     // Spine of the hash buckets
-  uint32_t nlocks_;                     // No. of locks
-  port::RWMutex* locks_;                // Granular locks
+  bool Insert(Bucket& bucket, const T& t) {
+    // Check if the key already exists
+    auto it = Find(bucket.list_, t) ;
+    assert(it == bucket.list_.end());
+    if (it != bucket.list_.end()) {
+      return false;
+    }
+
+    // insert to bucket
+    bucket.list_.push_back(t);
+    return true;
+  }
+
+  bool Find(Bucket& bucket, const T& t, T* ret) {
+    auto it = Find(bucket.list_, t);
+    if (it != bucket.list_.end()) {
+      if (ret) {
+        *ret = *it;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  bool Erase(Bucket& bucket, const T& t, T* ret) {
+    auto it = Find(bucket.list_, t);
+    if (it != bucket.list_.end()) {
+      if (ret) {
+        *ret = *it;
+      }
+
+      bucket.list_.erase(it);
+      return true;
+    }
+    return false;
+  }
+
+  // assert that all buckets are empty
+  void AssertEmptyBuckets() {
+#ifndef NDEBUG
+    for (size_t i = 0; i < nbuckets_; ++i) {
+      WriteLock _(&locks_[i % nlocks_]);
+      assert(buckets_[i].list_.empty());
+    }
+#endif
+  }
+
+  const uint32_t nbuckets_;                   // No. of buckets in the spine
+  std::unique_ptr<Bucket[]> buckets_;         // Spine of the hash buckets
+  const uint32_t nlocks_;                     // No. of locks
+  std::unique_ptr<port::RWMutex[]> locks_;    // Granular locks
 };
 
 }  // namespace rocksdb

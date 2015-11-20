@@ -7,7 +7,7 @@
 #include "include/rocksdb/slice.h"
 #include "cache/blkcache_cachefile.h"
 #include "cache/hash_table.h"
-#include "cache/blkcache_lrulist.h"
+#include "cache/lrulist.h"
 
 namespace rocksdb {
 

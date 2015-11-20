@@ -3,8 +3,8 @@
 #include <atomic>
 
 #include "include/rocksdb/cache.h"
-#include "cache/blkcache_lrulist.h"
 #include "cache/cache_tier.h"
+#include "cache/hash_table_evictable.h"
 #include "cache/hash_table.h"
 
 namespace rocksdb {
@@ -26,7 +26,6 @@ class VolatileCache : public PrimaryCacheTier {
                  deleter_t deleter) override;
   Handle* InsertBlock(const Slice& key, Block* value,
                       deleter_t deleter) override;
-
   Handle* Lookup(const Slice& key) override;
   void Release(Handle* handle) override;
   void* Value(Handle* handle) override;
@@ -34,7 +33,6 @@ class VolatileCache : public PrimaryCacheTier {
 
   void SetCapacity(size_t capacity) override { max_size_ = capacity; }
   size_t GetCapacity() const override { return size_; }
-
   size_t GetUsage(Handle* handle) const override {
     return ((CacheObject*) handle)->Size();
   }
@@ -160,17 +158,14 @@ class VolatileCache : public PrimaryCacheTier {
     }
   };
 
-  typedef HashTable<CacheObject*, CacheObjectHash, CacheObjectEqual> IndexType;
-  typedef LRUList<CacheObject> LRUListType;
+  typedef EvictableHashTable<CacheObject, CacheObjectHash, CacheObjectEqual> IndexType;
 
   // Evict LRU tail
   bool Evict();
   // Erase implementation without grabbing lock
   CacheObject* EraseFromIndex(const Slice& key);
 
-  port::RWMutex rwlock_;                // RW lock
   IndexType index_;                     // in-memory cache
-  LRUListType lru_list_;                // LRU list of elements
   std::atomic<uint64_t> max_size_;      // Maximum size of the cache
   std::atomic<uint64_t> size_;          // Size of the cache
 };

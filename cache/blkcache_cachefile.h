@@ -5,7 +5,7 @@
 #include <string>
 
 #include "cache/blkcache_buffer.h"
-#include "cache/blkcache_lrulist.h"
+#include "cache/lrulist.h"
 #include "cache/cache_tier.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
