@@ -39,7 +39,7 @@ class CacheWriteBuffer {
 
   virtual ~CacheWriteBuffer() {}
 
-  int Append(const char* buf, const size_t size) {
+  size_t Append(const char* buf, const size_t size) {
     assert(pos_ + size <= size_);
 
     const size_t ret = pos_;
@@ -132,9 +132,9 @@ class CacheWriteBufferAllocator {
     AdjustCapacity();
   }
 
-  uint64_t Capacity() const { return buffer_count_ * buffer_size_; }
-  uint64_t Free() const { return bufs_.size() * buffer_size_; }
-  uint32_t buffersize() const { return buffer_size_; }
+  size_t Capacity() const { return buffer_count_ * buffer_size_; }
+  size_t Free() const { return bufs_.size() * buffer_size_; }
+  size_t buffersize() const { return buffer_size_; }
 
  private:
   bool ExpandBuffer() {
@@ -175,9 +175,9 @@ class CacheWriteBufferAllocator {
 
   port::Mutex lock_;                    // Sync lock
   const bool auto_expand_;              // Should act like buffer pool ?
-  uint32_t buffer_size_;                // Size of each buffer
-  uint32_t buffer_count_;               // Buffer count
-  uint64_t target_size_;                // Ideal operational size
+  size_t buffer_size_;                  // Size of each buffer
+  size_t buffer_count_;                 // Buffer count
+  size_t target_size_;                  // Ideal operational size
   std::list<CacheWriteBuffer*> bufs_;   // Buffer stash
 };
 

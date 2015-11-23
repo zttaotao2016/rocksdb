@@ -53,7 +53,9 @@ TEST_F(HashTableTest, TestInsert) {
   // verify
   for (uint64_t k = 0; k < max_keys; ++k) {
     Node node(k, std::string()), val;
-    assert(map_.Find(k, &val));
+    port::RWMutex* rlock;
+    assert(map_.Find(k, &val, &rlock));
+    rlock->ReadUnlock();
     assert(val.val_ == std::string(1000, k % 255));
   }
 }
@@ -79,9 +81,11 @@ TEST_F(HashTableTest, TestErase) {
   // verify
   for (uint64_t k = 0; k < max_keys; ++k) {
     Node node(k, std::string()), val;
-    bool status = map_.Find(k, &val);
+    port::RWMutex* rlock = nullptr;
+    bool status = map_.Find(k, &val, &rlock);
     if (erased.find(k) == erased.end()) {
       assert(status);
+      rlock->ReadUnlock();
       assert(val.val_ == std::string(1000, k % 255));
     } else {
       assert(!status);

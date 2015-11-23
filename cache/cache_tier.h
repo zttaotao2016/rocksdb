@@ -5,7 +5,7 @@
 
 namespace rocksdb {
 
-class BlockCacheOptions;
+struct BlockCacheOptions;
 
 struct LogicalBlockAddress {
   LogicalBlockAddress() {}
@@ -50,7 +50,7 @@ class SecondaryCacheTier : public CacheTier {
   /**
    * Insert key value into the cache
    */
-  virtual Status Insert(const Slice& key, void* data, const uint32_t size) = 0;
+  virtual Status Insert(const Slice& key, void* data, const size_t size) = 0;
 
   /**
    * Lookup to see if the given key exists in the cache
@@ -61,7 +61,7 @@ class SecondaryCacheTier : public CacheTier {
    * Lookup a given key in the cache
    */
   virtual bool Lookup(const Slice & key, std::unique_ptr<char[]>* val,
-                      uint32_t* size) = 0;
+                      size_t* size) = 0;
 
   /**
    * Remove a given key from the cache

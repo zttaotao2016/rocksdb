@@ -55,6 +55,19 @@ class ReadLock {
   void operator=(const ReadLock&);
 };
 
+class ReadUnlock {
+ public:
+  explicit ReadUnlock(port::RWMutex *mu) : mu_(mu) {
+    mu->AssertHeld();
+  }
+  ~ReadUnlock() { this->mu_->ReadUnlock(); }
+
+ private:
+  port::RWMutex *const mu_;
+  // No copying allowed
+  ReadUnlock(const ReadUnlock&);
+  void operator=(const ReadUnlock&);
+};
 
 //
 // Acquire a WriteLock on the specified RWMutex.

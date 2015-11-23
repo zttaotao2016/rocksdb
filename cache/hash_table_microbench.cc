@@ -51,7 +51,7 @@ class HashTableImpl {
  */
 class HashTableBenchmark {
  public:
-  explicit HashTableBenchmark(HashTableImpl<int, std::string>* impl,
+  explicit HashTableBenchmark(HashTableImpl<size_t, std::string>* impl,
                          const size_t sec = 10,
                          const size_t nthread_write = 1,
                          const size_t nthread_read = 1,
@@ -94,7 +94,7 @@ class HashTableBenchmark {
 
   void RunWrite() {
     while (!quit_) {
-      int k = insert_key_++;
+      size_t k = insert_key_++;
       std::string tmp(1000, k % 255);
       bool status = impl_->Insert(k, tmp);
       assert(status);
@@ -105,7 +105,7 @@ class HashTableBenchmark {
   void RunRead() {
     while (!quit_) {
       std::string s;
-      int k = random() % max_prepop_key;
+      size_t k = random() % max_prepop_key;
       bool status = impl_->Lookup(k, &s);
       assert(status);
       assert(s == std::string(1000, k % 255));
@@ -115,7 +115,7 @@ class HashTableBenchmark {
 
   void RunErase() {
     while (!quit_) {
-      int k = erase_key_++;
+      size_t k = erase_key_++;
       bool status = impl_->Erase(k);
       nerases_failed_ += !status;
       nerases_++;
@@ -167,31 +167,31 @@ class HashTableBenchmark {
     reinterpret_cast<HashTableBenchmark*>(args)->RunErase();
   }
 
-  HashTableImpl<int, std::string>* impl_;  // Implementation to test
-  const size_t sec_;                       // Test time
-  const uint64_t max_prepop_key = 1024 * 1024;  // Max prepop key
-  std::atomic<uint64_t> insert_key_;       // Last inserted key
-  std::atomic<uint64_t> erase_key_;        // Erase key
-  std::atomic<size_t> ninserts_;           // Number of inserts
-  std::atomic<size_t> nreads_;             // Number of reads
-  std::atomic<size_t> nerases_;            // Number of erases
-  std::atomic<size_t> nerases_failed_;     // Number of erases failed
-  bool quit_;                              // Should the threads quit ?
+  HashTableImpl<size_t, std::string>* impl_;  // Implementation to test
+  const size_t sec_;                          // Test time
+  const size_t max_prepop_key = 1ULL * 1024 * 1024;  // Max prepop key
+  std::atomic<size_t> insert_key_;            // Last inserted key
+  std::atomic<size_t> erase_key_;             // Erase key
+  std::atomic<size_t> ninserts_;              // Number of inserts
+  std::atomic<size_t> nreads_;                // Number of reads
+  std::atomic<size_t> nerases_;               // Number of erases
+  std::atomic<size_t> nerases_failed_;        // Number of erases failed
+  bool quit_;                                 // Should the threads quit ?
 };
 
 /**
  * SimpleImpl
  * Lock safe unordered_map implementation
  */
-class SimpleImpl : public HashTableImpl<int, string> {
+class SimpleImpl : public HashTableImpl<size_t, string> {
  public:
-  bool Insert(const int& key, const string& val) override {
+  bool Insert(const size_t& key, const string& val) override {
     WriteLock _(&rwlock_);
     map_.insert(make_pair(key, val));
     return true;
   }
 
-  bool Erase(const int& key) override {
+  bool Erase(const size_t& key) override {
     WriteLock _(&rwlock_);
     auto it = map_.find(key);
     if (it == map_.end()) {
@@ -201,7 +201,7 @@ class SimpleImpl : public HashTableImpl<int, string> {
     return true;
   }
 
-  bool Lookup(const int& key, string* val) override {
+  bool Lookup(const size_t& key, string* val) override {
     ReadLock _(&rwlock_);
     auto it = map_.find(key);
     if (it != map_.end()) {
@@ -212,7 +212,7 @@ class SimpleImpl : public HashTableImpl<int, string> {
 
  private:
   port::RWMutex rwlock_;
-  std::unordered_map<int, string> map_;
+  std::unordered_map<size_t, string> map_;
 };
 
 /**
@@ -220,23 +220,24 @@ class SimpleImpl : public HashTableImpl<int, string> {
  * Thread safe custom RocksDB implementation of hash table with granular
  * locking
  */
-class GranularLockImpl : public HashTableImpl<int, string> {
+class GranularLockImpl : public HashTableImpl<size_t, string> {
  public:
-  bool Insert(const int& key, const string& val) override {
+  bool Insert(const size_t& key, const string& val) override {
     Node n(key, val);
     return impl_.Insert(n);
   }
 
-  bool Erase(const int& key) override {
+  bool Erase(const size_t& key) override {
     Node n(key, string());
     return impl_.Erase(n, nullptr);
   }
 
-  bool Lookup(const int& key, string* val) override {
+  bool Lookup(const size_t& key, string* val) override {
     Node n(key, string());
-    ReadLock _(impl_.GetMutex(n));
-    bool status = impl_.Find(n, &n);
+    port::RWMutex* rlock;
+    bool status = impl_.Find(n, &n, &rlock);
     if (status) {
+      ReadUnlock _(rlock);
       *val = n.val_;
     }
     return status;
@@ -244,9 +245,9 @@ class GranularLockImpl : public HashTableImpl<int, string> {
 
  private:
   struct Node {
-    explicit Node(const int key, const string& val) : key_(key), val_(val) {}
+    explicit Node(const size_t key, const string& val) : key_(key), val_(val) {}
 
-    int key_ = 0;
+    size_t key_ = 0;
     string val_;
   };
 

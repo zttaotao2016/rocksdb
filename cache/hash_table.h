@@ -63,7 +63,7 @@ class HashTable {
  public:
   explicit HashTable(const size_t capacity = 1024 * 1024,
                      const float load_factor = 2.0,
-                     const size_t nlocks = 256)
+                     const uint32_t nlocks = 256)
     : nbuckets_(load_factor ? capacity / load_factor : 0),
       nlocks_(nlocks) {
     // pre-conditions
@@ -112,15 +112,22 @@ class HashTable {
    * the caller owns the data, and should hold the read lock as long as he
    * operates on the data.
    */
-  bool Find(const T& t, T* ret) {
+  bool Find(const T& t, T* ret, port::RWMutex** ret_lock) {
     const uint64_t h = Hash()(t);
     const uint32_t bucket_idx = h % nbuckets_;
     const uint32_t lock_idx = bucket_idx % nlocks_;
 
-    locks_[lock_idx].AssertHeld();
+    port::RWMutex& lock = locks_[lock_idx];
+    lock.ReadLock();
 
     auto& bucket = buckets_[bucket_idx];
-    return Find(bucket, t, ret);
+    if (Find(bucket, t, ret)) {
+      *ret_lock = &lock;
+      return true;
+    }
+
+    lock.ReadUnlock();
+    return false;
   }
 
   /**
@@ -192,7 +199,6 @@ class HashTable {
   bool Insert(Bucket& bucket, const T& t) {
     // Check if the key already exists
     auto it = Find(bucket.list_, t) ;
-    assert(it == bucket.list_.end());
     if (it != bucket.list_.end()) {
       return false;
     }

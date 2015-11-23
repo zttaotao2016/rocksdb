@@ -14,14 +14,13 @@ namespace rocksdb {
  * Please note EvictableHashTable can only be created for pointer type objects
  */
 template<class T, class Hash, class Equal>
-class EvictableHashTable : private HashTable<T*, Hash, Equal>,
-                           public Evictable<T*> {
+class EvictableHashTable : private HashTable<T*, Hash, Equal> {
  public:
   typedef HashTable<T*, Hash, Equal> hash_table;
 
   explicit EvictableHashTable(const size_t capacity = 1024 * 1024,
                               const float load_factor = 2.0,
-                              const size_t nlocks = 256)
+                              const uint32_t nlocks = 256)
     : HashTable<T*, Hash, Equal>(capacity, load_factor, nlocks),
       lru_lists_(new LRUList<T>[hash_table::nlocks_]) {
     assert(lru_lists_);
@@ -61,27 +60,10 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal>,
     LRUListType& lru = GetLRUList(h);
     port::RWMutex& lock = GetMutex(h);
 
-    lock.AssertHeld();
-
+    ReadLock _(&lock);
     if (hash_table::Find(bucket, t, ret)) {
+      ++(*ret)->refs_;
       lru.Touch(*ret);
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Erase a given key from the hash table
-   */
-  bool Erase(T* t, T** ret) {
-    const uint64_t h = Hash()(t);
-    typename hash_table::Bucket& bucket = GetBucket(h);
-    LRUListType& lru = GetLRUList(h);
-    port::RWMutex& lock = GetMutex(h);
-
-    WriteLock _(&lock);
-    if (hash_table::Erase(bucket, t, ret)) {
-      lru.Unlink(*ret);
       return true;
     }
     return false;
@@ -90,7 +72,7 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal>,
   /**
    * Evict one of the least recently used object
    */
-  T* Evict() override {
+  T* Evict(const std::function<void(T*)>& fn = nullptr) {
     const size_t start_idx = random() % hash_table::nlocks_;
     T* t = nullptr;
 
@@ -101,6 +83,7 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal>,
       WriteLock _(&hash_table::locks_[idx]);
       LRUListType& lru = lru_lists_[idx];
       if (!lru.IsEmpty() && (t = lru.Pop())) {
+        assert(!t->refs_);
         // We got an item to evict, erase from the bucket
         const uint64_t h = Hash()(t);
         typename hash_table::Bucket& bucket = GetBucket(h);
@@ -108,6 +91,9 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal>,
         bool status = hash_table::Erase(bucket, t, &tmp);
         assert(t == tmp);
         assert(status);
+        if (fn) {
+          fn(t);
+        }
         break;
       }
       assert(!t);
@@ -122,8 +108,8 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal>,
       auto& lru_list = lru_lists_[lock_idx];
       auto& bucket = hash_table::buckets_[i];
       for (auto* t : bucket.list_) {
-        (*fn)(t);
         lru_list.Unlink(t);
+        (*fn)(t);
       }
       bucket.list_.clear();
     }

@@ -1,3 +1,4 @@
+#include <iostream>
 #include "cache/cache_volatile.h"
 
 using namespace rocksdb;
@@ -30,6 +31,7 @@ Cache::Handle* VolatileCache::Insert(const Slice& key, void* value,
 
   //insert order: LRU, followed by index
   bool status = index_.Insert(obj);
+  assert(status);
   if (status) {
     size_ += charge;
     return obj;
@@ -43,7 +45,6 @@ Cache::Handle* VolatileCache::Insert(const Slice& key, void* value,
   return obj;
 }
 
-
 Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
                                          deleter_t deleter) {
   while (size_ + block->size() > max_size_) {
@@ -53,15 +54,19 @@ Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
 
   CacheObject* obj = nullptr;
 #ifndef NDEBUG
-  // Debug check to make sure that the block already in cache is identical to
-  // the one we were asked to insert
-  CacheObject lookup_key(key);
-  if (index_.Find(&lookup_key, &obj)) {
-    // key already exists in the system
-    assert(obj->Size() == block->size());
-    assert(memcmp(obj->Value(), block->data(), obj->Size()) == 0);
-    ++obj->refs_;
-    return obj;
+  {
+    // Debug check to make sure that the block already in cache is identical to
+    // the one we were asked to insert
+    CacheObject lookup_key(key);
+    if (index_.Find(&lookup_key, &obj)) {
+      // key already exists in the system
+      assert(obj->Key() == key.ToString());
+      assert(obj->Size() == block->size());
+      Block* obj_block = (Block*) obj->Value();
+      assert(memcmp(obj_block->data(), block->data(), obj->Size()) == 0);
+      assert(obj->refs_);
+      --obj->refs_;
+    }
   }
 #endif
   // pre-condition
@@ -103,21 +108,18 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
   CacheObject* obj = nullptr;
   {
     CacheObject lookup_key(key);
-    ReadLock _(index_.GetMutex(&lookup_key));
     bool status = index_.Find(&lookup_key, &obj);
     if (status) {
-      // inc ref
-      ++obj->refs_;
+      assert(obj->refs_);
       return obj;
     }
   }
-
 
   assert(!obj);
   if (next_tier_) {
     // lookup in the secondary cache;
     std::unique_ptr<char[]> data;
-    uint32_t size;
+    size_t size;
     if (!next_tier_->Lookup(key, &data, &size)) {
       // data is not there in the secondary tier
       return nullptr;
@@ -137,16 +139,7 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
 }
 
 void VolatileCache::Erase(const Slice& key) {
-  // erase from index
-  CacheObject* obj = EraseFromIndex(key);
-  assert(obj);
-  if (!obj) {
-    return;
-  }
-
-  assert(size_ >= obj->Size());
-  size_ -= obj->Size();
-  delete obj;
+  assert(!"not supported");
 }
 
 void VolatileCache::Release(Cache::Handle* handle) {
@@ -170,19 +163,6 @@ void* VolatileCache::Value(Cache::Handle* handle) {
 /*
  * private member functions
  */
-VolatileCache::CacheObject* VolatileCache::EraseFromIndex(const Slice& key) {
-  CacheObject lookup_key(key);
-  CacheObject* obj = nullptr;
-  bool status = index_.Erase(&lookup_key, &obj);
-  assert(status);
-  assert(obj);
-
-  if (status && obj) {
-    assert(!obj->refs_);
-  }
-  return obj;
-}
-
 bool VolatileCache::Evict() {
   CacheObject* obj = index_.Evict();
   if (!obj) {
@@ -196,7 +176,8 @@ bool VolatileCache::Evict() {
       // insert only if the key does not already exists
       // This scenario can manifest since we insert to volatile cache after
       // reading from secondary cache
-      next_tier_->Insert(obj->Key(), (void*) block->data(), block->size());
+      next_tier_->Insert(obj->Key(), (void*) block->data(),
+                         static_cast<uint32_t>(block->size()));
     }
   }
 

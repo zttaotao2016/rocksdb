@@ -3,7 +3,6 @@
 
 #include "util/crc32c.h"
 #include "cache/blkcache_cachefile.h"
-#include "cache/cache_writeablefile.h"
 
 using namespace rocksdb;
 
@@ -69,7 +68,8 @@ struct CacheRecord
 {
   CacheRecord() {}
   CacheRecord(const Slice& key, const Slice& val)
-    : hdr_(MAGIC, key.size(), val.size()),
+    : hdr_(MAGIC, static_cast<uint32_t>(key.size()),
+           static_cast<uint32_t>(val.size())),
       key_(key),
       val_(val) {
     hdr_.crc_ = ComputeCRC();
@@ -251,7 +251,8 @@ WriteableCacheFile::~WriteableCacheFile() {
     // cache
     // TODO: Figure a way to flush the pending data
     assert(file_);
-    assert(refs_);
+
+    assert(refs_ == 1);
     --refs_;
   }
   ClearBuffers();

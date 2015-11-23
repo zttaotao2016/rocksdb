@@ -44,12 +44,16 @@ Status BlockCacheImpl::Open() {
 }
 
 Status BlockCacheImpl::Close() {
+  // stop the writer before
   writer_.Stop();
+  WriteLock _(&lock_);
+  // clear all metadata
+  metadata_.Clear();
   return Status::OK();
 }
 
 Status BlockCacheImpl::Insert(const Slice& key, void* buf,
-                              const uint32_t size) {
+                              const size_t size) {
   // pre-condition
   assert(buf);
   assert(size);
@@ -83,12 +87,13 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf,
 }
 
 bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
-                           uint32_t* size)
+                            size_t* size)
 {
   ReadLock _(&lock_);
 
   LBA lba;
-  bool status = metadata_.Lookup(key, &lba);
+  bool status;
+  status = metadata_.Lookup(key, &lba);
   if (!status) {
     Info(opt_.log, "Error looking up index for key %s", key.ToString().c_str());
     return status;
@@ -101,13 +106,16 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
     return false;
   }
 
+  assert(file->refs_);
+
   unique_ptr<char[]> scratch(new char[lba.size_]);
   Slice blk_key;
   Slice blk_val;
-  if (!file->Read(lba, &blk_key, &blk_val, scratch.get())) {
+
+  status = file->Read(lba, &blk_key, &blk_val, scratch.get());
+  --file->refs_;
+  if (!status) {
     assert(!"Unexpected error looking up cache");
-    Error(opt_.log, "Error looking up cache %d key %s", file->cacheid(),
-          key.ToString().c_str());
     return false;
   }
 
@@ -145,10 +153,12 @@ void BlockCacheImpl::NewCacheFile() {
   cacheFile_ = new WriteableCacheFile(opt_.env, bufferAllocator_, writer_,
                                       GetCachePath(), writerCacheId_,
                                       opt_.cache_file_size, opt_.log);
-  assert(cacheFile_->Create());
+  bool status;
+  status = cacheFile_->Create();
+  assert(status);
 
   // insert to cache files tree
-  bool status = metadata_.Insert(cacheFile_);
+  status = metadata_.Insert(cacheFile_);
   (void) status;
   assert(status);
 }
@@ -236,7 +246,7 @@ Cache::Handle* RocksBlockCache::Lookup(const Slice& key) {
   assert(cache_);
 
   unique_ptr<char[]> data;
-  uint32_t size;
+  size_t size;
   if (!cache_->Lookup(key, &data, &size)) {
     return nullptr;
   }
