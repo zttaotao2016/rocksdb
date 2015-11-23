@@ -2,7 +2,7 @@
 
 #include "cache/blkcache_cachefile.h"
 #include "cache/cache_tier.h"
-#include "cache/blkcache_index.h"
+#include "cache/cache_metadata.h"
 #include "cache/blkcache_writer.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
@@ -65,7 +65,7 @@ struct BlockCacheOptions {
    *
    * default: 1M
    */
-  uint64_t cache_file_size = 100ULL * 1024 * 1024;
+  uint32_t cache_file_size = 100ULL * 1024 * 1024;
 
   /**
    * The writers can issues IO to the devices in parallel. This parameter
@@ -116,15 +116,15 @@ class BlockCacheImpl : public SecondaryCacheTier {
   virtual ~BlockCacheImpl() {}
 
   // Open and initialize cache
-  Status Open();
+  Status Open() override;
 
   /*
    * override from SecondaryCacheTier
    */
-  Status Insert(const Slice& key, void* data, uint32_t size) override;
+  Status Insert(const Slice& key, void* data, const size_t size) override;
   bool LookupKey(const Slice& key) override;
   bool Lookup(const Slice & key, std::unique_ptr<char[]>* data,
-              uint32_t* size) override;
+              size_t* size) override;
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
   Status Close() override;
@@ -141,7 +141,7 @@ class BlockCacheImpl : public SecondaryCacheTier {
   WriteableCacheFile* cacheFile_;       // Current cache file reference
   CacheWriteBufferAllocator bufferAllocator_; // Buffer provider
   ThreadedWriter writer_;               // Writer threads
-  SimpleBlockCacheMetadata metadata_;   // Cache meta data manager
+  BlockCacheMetadata metadata_;         // Cache meta data manager
   std::atomic<uint64_t> size_;          // Size of the cache
 };
 

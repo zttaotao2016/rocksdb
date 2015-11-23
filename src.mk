@@ -95,7 +95,7 @@ LIB_SOURCES =                                                   \
   util/iostats_context.cc                                       \
   cache/blkcache.cc                                             \
   cache/blkcache_cachefile.cc                                   \
-  cache/blkcache_index.cc                                       \
+  cache/cache_metadata.cc                                       \
   cache/cache_volatile.cc                                       \
   cache/cache_tier.cc                                           \
   utilities/backupable/backupable_db.cc                         \

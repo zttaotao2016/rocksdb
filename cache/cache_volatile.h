@@ -162,8 +162,6 @@ class VolatileCache : public PrimaryCacheTier {
 
   // Evict LRU tail
   bool Evict();
-  // Erase implementation without grabbing lock
-  CacheObject* EraseFromIndex(const Slice& key);
 
   IndexType index_;                     // in-memory cache
   std::atomic<uint64_t> max_size_;      // Maximum size of the cache

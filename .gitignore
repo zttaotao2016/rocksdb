@@ -33,6 +33,7 @@ package/
 .phutil_module_cache
 unity
 tags
+hash_table_microbench
 
 java/out
 java/target

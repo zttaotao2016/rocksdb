@@ -107,6 +107,18 @@ class BlockCacheImplTest : public testing::Test {
     }
   }
 
+  void ThreadedVerifyBlocks(const size_t nthreads) {
+    key_ = 0;
+
+    for (size_t i = 0; i < nthreads; i++) {
+      env_->StartThread(&BlockCacheImplTest::VerifyBlocksMain, this);
+    }
+
+    while (key_ < max_keys_) {
+      sleep(1);
+    }
+  }
+
  protected:
   std::shared_ptr<TieredCache> NewTieredCache() {
     // create primary cache
@@ -127,7 +139,7 @@ class BlockCacheImplTest : public testing::Test {
     assert(pad_size);
 
     char ret[pad_size];
-    int pos = pad_size - 1;
+    size_t pos = pad_size - 1;
     size_t count = 0;
     size_t t = data;
 
@@ -276,6 +288,11 @@ class BlockCacheImplTest : public testing::Test {
     self->Verify();
   }
 
+  static void VerifyBlocksMain(void* arg) {
+    BlockCacheImplTest* self = (BlockCacheImplTest*) arg;
+    self->VerifyBlocks();
+  }
+
   std::shared_ptr<BlockCacheImpl> cache_;
   std::shared_ptr<Cache> block_cache_;
   Arena arena_;
@@ -343,6 +360,7 @@ TEST_F(BlockCacheImplTest, MultithreadedBlockInsert) {
   const size_t max_keys = 5 * 10 * 1024;
   InsertBlocks(/*nthreads=*/ 5, max_keys);
   VerifyBlocks();
+  ThreadedVerifyBlocks(/*nthread=*/ 5);
 }
 
 TEST_F(BlockCacheImplTest, MultithreadedVolatileCacheBlockInsert) {
@@ -350,6 +368,7 @@ TEST_F(BlockCacheImplTest, MultithreadedVolatileCacheBlockInsert) {
   const size_t max_keys = 5 * 10 * 1024;
   InsertBlocks(/*nthreads=*/ 5, max_keys);
   VerifyBlocks();
+  ThreadedVerifyBlocks(/*nthread=*/ 5);
 }
 
 TEST_F(BlockCacheImplTest, Insert1M) {
@@ -363,6 +382,7 @@ TEST_F(BlockCacheImplTest, BlockInsert1M) {
   const size_t max_keys = 1 * 1024 * 1024;
   InsertBlocks(/*nthreads=*/ 10, max_keys);
   VerifyBlocks();
+  ThreadedVerifyBlocks(/*nthread=*/ 10);
 }
 
 TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1M) {
@@ -370,6 +390,7 @@ TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1M) {
   const size_t max_keys = 1 * 1024 * 1024;
   InsertBlocks(/*nthreads=*/ 10, max_keys);
   VerifyBlocks();
+  ThreadedVerifyBlocks(/*nthread=*/ 10);
 }
 
 TEST_F(BlockCacheImplTest, Insert1MWithEviction) {

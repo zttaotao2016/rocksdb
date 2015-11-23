@@ -19,7 +19,7 @@
 namespace rocksdb {
 
 class WriteableCacheFile;
-class BlockInfo;
+struct BlockInfo;
 
 /**
  * BlockCacheFile
@@ -54,6 +54,10 @@ class Writer {
 class BlockCacheFile : public LRUElement<BlockCacheFile>
 {
  public:
+  BlockCacheFile(const uint32_t cache_id)
+    : LRUElement<BlockCacheFile>(),
+      cache_id_(cache_id) {}
+
   BlockCacheFile(Env* const env, const std::string& dir,
                  const uint32_t cache_id)
     : LRUElement<BlockCacheFile>(),
@@ -64,9 +68,13 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
 
   virtual ~BlockCacheFile() {}
 
-  virtual bool Append(const Slice& key, const Slice& val, LBA* const lba) = 0;
+  virtual bool Append(const Slice& key, const Slice& val, LBA* const lba) {
+    throw std::runtime_error("not implemented");
+  }
 
-  virtual bool Read(const LBA& lba, Slice* key, Slice* block, char* scratch) = 0;
+  virtual bool Read(const LBA& lba, Slice* key, Slice* block, char* scratch) {
+    throw std::runtime_error("not implemented");
+  }
 
   std::string Path() const {
     return dir_ + "/" + std::to_string(cache_id_);
@@ -74,7 +82,9 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
 
   uint32_t cacheid() const { return cache_id_; }
 
-  virtual void Add(BlockInfo* binfo) = 0;
+  virtual void Add(BlockInfo* binfo) {
+    throw std::runtime_error("not implemented");
+  }
 
   std::list<BlockInfo*>& block_infos() { return block_infos_; }
 
@@ -82,7 +92,7 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
 
  protected:
 
-  Env* const env_;
+  Env* const env_ = nullptr;
   const std::string dir_;
   const uint32_t cache_id_;
   std::list<BlockInfo*> block_infos_;
