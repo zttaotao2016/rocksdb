@@ -73,6 +73,14 @@ ifeq ($(MAKECMDGOALS),rocksdbjavastatic)
 	DEBUG_LEVEL=0
 endif
 
+ifeq ($(MAKECMDGOALS),rocksdbjavastaticrelease)
+	DEBUG_LEVEL=0
+endif
+
+ifeq ($(MAKECMDGOALS),rocksdbjavastaticpublish)
+	DEBUG_LEVEL=0
+endif
+
 # compile with -O2 if debug level is not 2
 ifneq ($(DEBUG_LEVEL), 2)
 OPT += -O2 -fno-omit-frame-pointer
@@ -340,7 +348,8 @@ TOOLS = \
 	rocksdb_dump \
 	rocksdb_undump
 
-BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench forward_iterator_bench
+# TODO: add back forward_iterator_bench, after making it build in all environemnts.
+BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench
 
 # if user didn't config LIBNAME, set the default
 ifeq ($(LIBNAME),)
@@ -991,9 +1000,6 @@ microbench_cacheimpl: cache/microbench_cacheimpl.o db/db_test_util.o  $(LIBOBJEC
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
-	$(AM_LINK)
-
-forward_iterator_bench: db/forward_iterator_bench.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 #-------------------------------------------------

@@ -67,7 +67,7 @@ bool CondVar::TimedWait(uint64_t abs_time_us) {
   using namespace std::chrono;
 
   // MSVC++ library implements wait_until in terms of wait_for so
-  // we need to convert absoulte wait into relative wait.
+  // we need to convert absolute wait into relative wait.
   microseconds usAbsTime(abs_time_us);
 
   microseconds usNow(
@@ -100,7 +100,7 @@ void CondVar::Signal() { cv_.notify_one(); }
 void CondVar::SignalAll() { cv_.notify_all(); }
 
 void InitOnce(OnceType* once, void (*initializer)()) {
-  std::call_once(*once, initializer);
+  std::call_once(once->flag_, initializer);
 }
 
 // Private structure, exposed only by pointer

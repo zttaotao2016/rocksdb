@@ -14,6 +14,7 @@
 # 3. Run cmake to generate project files for Windows, add more options to enable required third-party libraries.
 #    See thirdparty.inc for more information.
 #        sample command: cmake -G "Visual Studio 12 Win64" -DGFLAGS=1 -DSNAPPY=1 -DJEMALLOC=1 ..
+#        OR for VS Studio 15 cmake -G "Visual Studio 12 Win64" -DGFLAGS=1 -DSNAPPY=1 -DJEMALLOC=1 ..
 # 4. Then build the project in debug mode (you may want to add /m[:<N>] flag to run msbuild in <N> parallel threads
 #                                          or simply /m ot use all avail cores)
 #        msbuild rocksdb.sln
@@ -58,7 +59,8 @@ add_custom_command(OUTPUT ${BUILD_VERSION_CC}
 add_custom_target(GenerateBuildVersion DEPENDS ${BUILD_VERSION_CC})
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /nologo  /EHsc /GS /Gd /GR /GF /fp:precise /Zc:wchar_t /Zc:forScope /errorReport:queue")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FC /d2Zi+ /W3 /WX /wd4127 /wd4244 /wd4267 /wd4800 /wd4804 /wd4996")
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FC /d2Zi+ /W3 /WX /wd4127 /wd4244 /wd4267 /wd4800 /wd4996")
 
 # Used to run CI build and tests so we can run faster
 set(OPTIMIZE_DEBUG_DEFAULT 0)        # Debug build is unoptimized by default use -DOPTDBG=1 to optimize
@@ -285,7 +287,6 @@ target_link_libraries(rocksdb${ARTIFACT_SUFFIX} ${LIBS})
 
 set(APPS
         db/db_bench.cc
-        db/forward_iterator_bench.cc
         db/memtablerep_bench.cc
         table/table_reader_bench.cc
         tools/db_stress.cc
