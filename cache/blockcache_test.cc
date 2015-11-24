@@ -10,7 +10,7 @@
 #include <iostream>
 
 #include "include/rocksdb/cache.h"
-#include "cache/blkcache.h"
+#include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
 #include "util/testharness.h"
 #include "util/arena.h"
@@ -139,7 +139,7 @@ class BlockCacheImplTest : public testing::Test {
     assert(pad_size);
 
     char ret[pad_size];
-    size_t pos = pad_size - 1;
+    int pos = static_cast<int>(pad_size) - 1;
     size_t count = 0;
     size_t t = data;
 
@@ -173,7 +173,7 @@ class BlockCacheImplTest : public testing::Test {
       auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
       unique_ptr<char[]> block;
-      uint32_t block_size;
+      size_t block_size;
       if (relaxed && !cache_->Lookup(key, &block, &block_size)) {
         continue;
       }

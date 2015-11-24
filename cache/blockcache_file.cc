@@ -2,7 +2,7 @@
 #include <iostream>
 
 #include "util/crc32c.h"
-#include "cache/blkcache_cachefile.h"
+#include "cache/blockcache_file.h"
 
 using namespace rocksdb;
 

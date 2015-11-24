@@ -1,4 +1,4 @@
-#include <cache/cache_metadata.h>
+#include <cache/blockcache_metadata.h>
 #include <functional>
 
 using namespace rocksdb;

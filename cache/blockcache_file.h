@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-#include "cache/blkcache_buffer.h"
+#include "cache/blockcache_alloc.h"
 #include "cache/lrulist.h"
 #include "cache/cache_tier.h"
 #include "db/skiplist.h"

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "cache/blkcache_cachefile.h"
+#include "cache/blockcache_file.h"
+#include "cache/blockcache_metadata.h"
+#include "cache/blockcache_file_writer.h"
 #include "cache/cache_tier.h"
-#include "cache/cache_metadata.h"
-#include "cache/blkcache_writer.h"
 #include "db/skiplist.h"
 #include "include/rocksdb/comparator.h"
 #include "include/rocksdb/env.h"
@@ -27,14 +27,15 @@ namespace rocksdb {
 struct BlockCacheOptions {
   BlockCacheOptions(Env* const _env, const std::string& _path,
                     const uint64_t _cache_size,
-                    const std::shared_ptr<Logger>& _log) {
+                    const std::shared_ptr<Logger>& _log,
+                    const uint32_t _write_buffer_size = 1 * 1024 * 1024) {
     env = _env;
     path = _path;
     log = _log;
     cache_size = _cache_size;
     cache_file_size = 100ULL * 1024 * 1024;
     writer_qdepth = 2;
-    write_buffer_size = 1 * 1024 * 1024;
+    write_buffer_size = _write_buffer_size;
     write_buffer_count = 200;
     bufferpool_limit = 2ULL * write_buffer_size * write_buffer_count;
   }
