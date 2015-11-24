@@ -41,7 +41,7 @@ int main() {
 #include <thread>
 
 #include "cache/cache_tier.h"
-#include "cache/blkcache.h"
+#include "cache/blockcache.h"
 #include "db/db_impl.h"
 #include "db/version_set.h"
 #include "rocksdb/options.h"

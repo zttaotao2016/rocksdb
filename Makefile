@@ -332,9 +332,8 @@ TESTS = \
 	compaction_job_stats_test \
 	transaction_test \
 	ldb_cmd_test \
-	blkcache_test \
+	blockcache_test \
 	hash_table_test \
-	hash_table_microbench \
 
 SUBSET :=  $(shell echo $(TESTS) |sed s/^.*$(ROCKSDBTESTS_START)/$(ROCKSDBTESTS_START)/)
 
@@ -349,7 +348,8 @@ TOOLS = \
 	rocksdb_undump
 
 # TODO: add back forward_iterator_bench, after making it build in all environemnts.
-BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench
+BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench \
+             hash_table_bench blockcache_bench
 
 # if user didn't config LIBNAME, set the default
 ifeq ($(LIBNAME),)
@@ -987,16 +987,16 @@ sst_dump: tools/sst_dump.o $(LIBOBJECTS)
 ldb_cmd_test: tools/ldb_cmd_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-blkcache_test: cache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+blockcache_test: cache/blockcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 hash_table_test: cache/hash_table_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-hash_table_microbench: cache/hash_table_microbench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+hash_table_bench: cache/hash_table_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-microbench_cacheimpl: cache/microbench_cacheimpl.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+blockcache_bench: cache/blockcache_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)

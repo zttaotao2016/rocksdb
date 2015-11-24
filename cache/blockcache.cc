@@ -1,6 +1,6 @@
 #include <utility>
 
-#include "cache/blkcache.h"
+#include "cache/blockcache.h"
 
 using namespace rocksdb;
 

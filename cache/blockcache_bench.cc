@@ -8,7 +8,7 @@
 #include "include/rocksdb/env.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
-#include "cache/blkcache.h"
+#include "cache/blockcache.h"
 
 using namespace rocksdb;
 using namespace std;
@@ -17,13 +17,8 @@ DEFINE_int32(nsec, 10, "nsec");
 DEFINE_int32(nthread_write, 1, "Insert threads");
 DEFINE_int32(nthread_read, 1, "Lookup threads");
 DEFINE_string(path, "/tmp/microbench/blkcache", "Path for cachefile");
-DEFINE_int32(buffer_size, 1024 * 1024, "Write buffer size");
-DEFINE_uint64(max_buffer_size, 0, "Maximum write buffer size");
-DEFINE_int32(nbuffers, 100, "Buffer count");
-DEFINE_int64(cache_file_size, 100, "Cache file size");
-DEFINE_int32(qdepth, 2, "qdepth");
-DEFINE_int32(iosize, 4 * 1024 * 1024, "IO size");
 DEFINE_uint64(cache_size, UINT64_MAX, "Cache size");
+DEFINE_int32(iosize, 4*1024, "IO size");
 DEFINE_bool(benchmark, false, "Benchmark mode");
 
 uint64_t NowInMillSec() {
@@ -60,20 +55,12 @@ class MicroBenchmark {
     Status status;
 
     Env* env = Env::Default();
-    BlockCacheImpl::Options opt;
-    opt.path = FLAGS_path;
-    opt.info_log = shared_ptr<Logger>(new ConsoleLogger());
-    opt.writeBufferSize = FLAGS_buffer_size;
-    opt.writeBufferCount = FLAGS_nbuffers;
-    opt.max_bufferpool_size_ = FLAGS_max_buffer_size ? FLAGS_max_buffer_size
-                  : 2LLU * opt.writeBufferSize * opt.writeBufferCount;
-    opt.maxCacheFileSize = FLAGS_cache_file_size;
-    opt.writer_qdepth_ = FLAGS_qdepth;
-    opt.max_size_ = FLAGS_cache_size;
+    auto log = shared_ptr<Logger>(new ConsoleLogger());
+    BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log, FLAGS_iosize);
 
     cout << "Creating BlockCacheImpl" << endl;
 
-    impl_.reset(new BlockCacheImpl(env, opt));
+    impl_.reset(new BlockCacheImpl(opt));
 
     cout << "Opening cache" << endl;
 
@@ -135,10 +122,9 @@ class MicroBenchmark {
       memset(data, val % 255, FLAGS_iosize);
     }
     Slice key((char*) &k, sizeof(k));
-    LBA lba;
 
     while (!quit_) {
-      Status status = impl_->Insert(key, data, FLAGS_iosize, &lba);
+      Status status = impl_->Insert(key, data, FLAGS_iosize);
       if (status == Status::TryAgain()) {
         continue;
       }
@@ -157,7 +143,7 @@ class MicroBenchmark {
       LBA lba;
 
       unique_ptr<char[]> val;
-      uint32_t size;
+      size_t size;
       bool ok = impl_->Lookup(key, &val, &size);
       assert(ok);
       assert(size == (size_t) FLAGS_iosize);

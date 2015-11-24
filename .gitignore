@@ -42,7 +42,6 @@ unity.a
 tags
 rocksdb_dump
 rocksdb_undump
-hash_table_microbench
 
 java/out
 java/target
