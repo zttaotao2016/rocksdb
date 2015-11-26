@@ -304,6 +304,7 @@ bool WriteableCacheFile::Append(const Slice& key, const Slice& val,
 
   CacheRecord rec(key, val);
   if (!rec.Serialize(bufs_, buf_woff_)) {
+    assert(!"Error serializing record");
     return false;
   }
 

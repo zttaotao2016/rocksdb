@@ -26,10 +26,7 @@ struct LRUElement
 template<class T>
 class LRUList
 {
-public:
-
-  LRUList() : head_(nullptr), tail_(nullptr) {}
-
+ public:
   virtual ~LRUList() {
     MutexLock _(&lock_);
     assert(!head_);
@@ -37,15 +34,15 @@ public:
   }
 
   inline void Push(T* const t) {
-    MutexLock _(&lock_);
-    // list pre-condition
-    assert((!head_ && !tail_) || (head_ && tail_));
-    assert(!head_ || !head_->prev_);
-    assert(!tail_ || !tail_->next_);
-    // arg pre-condition
     assert(t);
     assert(!t->next_);
     assert(!t->prev_);
+
+    MutexLock _(&lock_);
+
+    assert((!head_ && !tail_) || (head_ && tail_));
+    assert(!head_ || !head_->prev_);
+    assert(!tail_ || !tail_->next_);
 
     t->next_ = head_;
     if (head_) {
@@ -65,6 +62,7 @@ public:
 
   inline T* Pop() {
     MutexLock _(&lock_);
+
     assert(tail_ && head_);
     assert(!tail_->next_);
     assert(!head_->prev_);
@@ -74,11 +72,15 @@ public:
       t = t->next_;
     }
 
-    if (t) {
-      assert(!t->refs_);
-      UnlinkImpl(t);
+    if (!t) {
+      // nothing can be evicted
+      return nullptr;
     }
 
+    assert(!t->refs_);
+
+    // unlike the element
+    UnlinkImpl(t);
     return t;
   }
 
@@ -93,10 +95,12 @@ public:
     return !head_ && !tail_;
   }
 
-private:
+ private:
   void UnlinkImpl(T* const t) {
-    lock_.AssertHeld();
     assert(t);
+
+    lock_.AssertHeld();
+
     assert(head_ && tail_);
     assert(t->prev_ || head_ == t);
     assert(t->next_ || tail_ == t);
@@ -124,15 +128,15 @@ private:
   }
 
   inline void PushBackImpl(T* const t) {
-    lock_.AssertHeld();
-    // list pre-condition
-    assert((!head_ && !tail_) || (head_ && tail_));
-    assert(!head_ || !head_->prev_);
-    assert(!tail_ || !tail_->next_);
-    // arg pre-condition
     assert(t);
     assert(!t->next_);
     assert(!t->prev_);
+
+    lock_.AssertHeld();
+
+    assert((!head_ && !tail_) || (head_ && tail_));
+    assert(!head_ || !head_->prev_);
+    assert(!tail_ || !tail_->next_);
 
     t->prev_ = tail_;
     if (tail_) {
@@ -145,10 +149,9 @@ private:
     }
   }
 
-
-  mutable port::Mutex lock_;
-  T* head_;           // front (cold)
-  T* tail_;           // back (hot)
+  mutable port::Mutex lock_;    // syncronization primitive
+  T* head_ = nullptr;           // front (cold)
+  T* tail_ = nullptr;           // back (hot)
 };
 
 }

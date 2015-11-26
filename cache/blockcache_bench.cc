@@ -5,10 +5,11 @@
 #include <gflags/gflags.h>
 #include <functional>
 
+#include "cache/cache_util.h"
+#include "cache/blockcache.h"
 #include "include/rocksdb/env.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
-#include "cache/blockcache.h"
 
 using namespace rocksdb;
 using namespace std;
@@ -26,20 +27,6 @@ uint64_t NowInMillSec() {
   gettimeofday(&tv, /*tz=*/ nullptr);
   return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
-
-class ConsoleLogger : public Logger {
- public:
-  using Logger::Logv;
-  ConsoleLogger() : Logger(InfoLogLevel::ERROR_LEVEL) {}
-
-  void Logv(const char* format, va_list ap) override {
-    MutexLock _(&lock_);
-    vprintf(format, ap);
-    printf("\n");
-  }
-
-  port::Mutex lock_;
-};
 
 //
 // Benchmark driver

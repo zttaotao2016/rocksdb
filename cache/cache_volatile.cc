@@ -172,13 +172,8 @@ bool VolatileCache::Evict() {
   if (next_tier_ && obj->Serializable()) {
     Block* block = (Block*) obj->Value();
     assert(block);
-    if (!next_tier_->LookupKey(obj->Key())) {
-      // insert only if the key does not already exists
-      // This scenario can manifest since we insert to volatile cache after
-      // reading from secondary cache
-      next_tier_->Insert(obj->Key(), (void*) block->data(),
-                         static_cast<uint32_t>(block->size()));
-    }
+    next_tier_->Insert(obj->Key(), (void*) block->data(),
+                       static_cast<uint32_t>(block->size()));
   }
 
   assert(size_ >= obj->Size());

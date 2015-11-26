@@ -44,16 +44,43 @@ Status BlockCacheImpl::Open() {
 }
 
 Status BlockCacheImpl::Close() {
+  // stop the insert thread
+  InsertOp op(/*quit=*/ true);
+  insert_ops_.Push(std::move(op));
+  insert_th_.join();
+
   // stop the writer before
   writer_.Stop();
-  WriteLock _(&lock_);
+
   // clear all metadata
+  WriteLock _(&lock_);
   metadata_.Clear();
   return Status::OK();
 }
 
-Status BlockCacheImpl::Insert(const Slice& key, void* buf,
-                              const size_t size) {
+Status BlockCacheImpl::Insert(const Slice& key, void* data, const size_t size) {
+  std::unique_ptr<char[]> tmp(new char[size]);
+  memcpy(tmp.get(), data, size);
+  insert_ops_.Push(InsertOp(key.ToString(), std::move(tmp), size));
+  assert(!tmp);
+  return Status::OK();
+}
+
+void BlockCacheImpl::InsertMain() {
+  while (true) {
+    InsertOp op(std::move(insert_ops_.Pop()));
+
+    if (op.exit_loop_) {
+      break;
+    }
+
+    while (!InsertImpl(Slice(op.key_), op.data_, op.size_).ok());
+  }
+}
+
+Status BlockCacheImpl::InsertImpl(const Slice& key,
+                                  const std::unique_ptr<char[]>& buf,
+                                  const size_t size) {
   // pre-condition
   assert(buf);
   assert(size);
@@ -67,8 +94,10 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf,
     return Status::OK();
   }
 
-  while (!cacheFile_->Append(key, Slice((char*) buf, size), &lba)) {
+  Slice data(buf.get(), size);
+  while (!cacheFile_->Append(key, data, &lba)) {
     if (!cacheFile_->Eof()) {
+      // add condition variable driven logic here
       Debug(opt_.log, "Error inserting to cache file %d", cacheFile_->cacheid());
       return Status::TryAgain();
     }
@@ -89,7 +118,7 @@ Status BlockCacheImpl::Insert(const Slice& key, void* buf,
 bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
                             size_t* size)
 {
-  ReadLock _(&lock_);
+  // ReadLock _(&lock_);
 
   LBA lba;
   bool status;
@@ -100,9 +129,9 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   }
 
   BlockCacheFile* const file = metadata_.Lookup(lba.cache_id_);
-  assert(file);
   if (!file) {
-    Error(opt_.log, "Error looking up cache file %d", lba.cache_id_);
+    // this can happen because the block index and cache file index are
+    // different, and the cache file might be removed between the two lookups
     return false;
   }
 
@@ -126,13 +155,6 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   *size = blk_val.size();
 
   return true;
-}
-
-bool BlockCacheImpl::LookupKey(const Slice& key) {
-  ReadLock _(&lock_);
-
-  LBA lba;
-  return metadata_.Lookup(key, &lba);
 }
 
 bool BlockCacheImpl::Erase(const Slice& key) {
@@ -197,73 +219,4 @@ bool BlockCacheImpl::Reserve(const size_t size) {
   size_ += size;
   assert(size_ <= opt_.cache_size * 0.9);
   return true;
-}
-
-//
-// RocksBlockCache
-//
-RocksBlockCache::RocksBlockCache(const std::shared_ptr<BlockCacheImpl>& impl) {
-  cache_ = impl;
-}
-
-RocksBlockCache::RocksBlockCache(Env* env, const std::string path) {
-  std::shared_ptr<Logger> log;
-  Status s = env->NewLogger(path + "/cache.log", &log);
-  assert(s.ok());
-  BlockCacheOptions opt(env, path, /*size=*/ UINT64_MAX, log);
-  cache_.reset(new BlockCacheImpl(opt));
-  assert(cache_->Open().ok());
-}
-
-RocksBlockCache::~RocksBlockCache() {
-  cache_->Close();
-}
-
-RocksBlockCache::Handle* RocksBlockCache::Insert(const Slice& key, void* value,
-                                                 const size_t size,
-                                                 void (*deleter)(const Slice&, void*)) {
-  return new DataHandle(key, (char*) value, size, deleter);
-}
-
-Cache::Handle* RocksBlockCache::InsertBlock(const Slice& key, Block* block,
-                                            void (*deleter)(const Slice&, void*)) {
-  assert(cache_);
-  assert(block);
-
-  // At this point we don't support hash index or prefix index
-  assert(!block->HasIndex());
-  assert(block->compression_type() == kNoCompression);
-  assert(block->size());
-
-  if (!cache_->Insert(key, (void*) block->data(), block->size()).ok()) {
-    return nullptr;
-  }
-
-  return new BlockHandle(key, block,  deleter);
-}
-
-Cache::Handle* RocksBlockCache::Lookup(const Slice& key) {
-  assert(cache_);
-
-  unique_ptr<char[]> data;
-  size_t size;
-  if (!cache_->Lookup(key, &data, &size)) {
-    return nullptr;
-  }
-
-  Block* block = Block::NewBlock(std::move(data), size);
-  assert(block->size() == size);
-  auto* h = new BlockHandle(key, block);
-  return h;
-}
-
-void RocksBlockCache::Release(Cache::Handle* handle) {
-  assert(handle);
-  HandleBase* h = (HandleBase*) handle;
-  delete h;
-}
-
-void* RocksBlockCache::Value(Cache::Handle* handle) {
-  assert(handle);
-  return ((HandleBase*) handle)->value();
 }
