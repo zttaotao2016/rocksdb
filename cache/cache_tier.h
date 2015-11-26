@@ -7,6 +7,11 @@ namespace rocksdb {
 
 struct BlockCacheOptions;
 
+/**
+ * Represents a logical record on device
+ *
+ * LBA = { cache-file-id, offset, size }
+ */
 struct LogicalBlockAddress {
   LogicalBlockAddress() {}
   LogicalBlockAddress(const uint32_t cache_id, const uint32_t off,
@@ -31,6 +36,9 @@ class CacheTier {
    * Close cache
    */
   virtual Status Close() = 0;
+
+  // TEST: Flush data
+  virtual void Flush_TEST() = 0;
 };
 
 /**
@@ -53,11 +61,6 @@ class SecondaryCacheTier : public CacheTier {
   virtual Status Insert(const Slice& key, void* data, const size_t size) = 0;
 
   /**
-   * Lookup to see if the given key exists in the cache
-   */
-  virtual bool LookupKey(const Slice& key) = 0;
-
-  /**
    * Lookup a given key in the cache
    */
   virtual bool Lookup(const Slice & key, std::unique_ptr<char[]>* val,
@@ -72,6 +75,7 @@ class SecondaryCacheTier : public CacheTier {
    * Expand the cache to accommodate new data
    */
   virtual bool Reserve(const size_t size) = 0;
+
 };
 
 /**
@@ -87,6 +91,13 @@ class PrimaryCacheTier : public Cache, public CacheTier {
       next_tier_->Close();
     }
     return Status::OK();
+  }
+
+  // TEST: Flush data
+  void Flush_TEST() override {
+    if (next_tier_) {
+      next_tier_->Flush_TEST();
+    }
   }
 
   std::unique_ptr<SecondaryCacheTier> next_tier_;

@@ -11,7 +11,6 @@ BlockCacheFile* BlockCacheMetadata::Lookup(const uint32_t cache_id) {
   BlockCacheFile* ret = nullptr;
   BlockCacheFile lookup_key(cache_id);
   bool status = cache_file_index_.Find(&lookup_key, &ret);
-  assert(status);
   if (status) {
     assert(ret->refs_);
     return ret;

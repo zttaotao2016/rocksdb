@@ -2,154 +2,95 @@
 
 #include <unistd.h>
 #include <memory>
+#include <thread>
+
+#include "cache/cache_util.h"
 #include "include/rocksdb/env.h"
 
 namespace rocksdb {
 
 /**
- *
- *
+ * Representation of IO to device
  */
-class IOQueue {
- public:
+struct IO {
+  explicit IO(const bool signal) : signal_(signal) {}
+  explicit IO(WriteableCacheFile* const file, CacheWriteBuffer* const buf)
+    : file_(file), buf_(buf) {}
 
-  struct IO {
-    IO(WriteableCacheFile* const file, CacheWriteBuffer* const buf)
-        : file_(file), buf_(buf)
-    {}
+  IO(const IO&) = default;
+  IO& operator=(const IO&) = default;
+  size_t Size() const { return sizeof(IO); }
 
-    WriteableCacheFile* file_;
-    CacheWriteBuffer* buf_;
-  };
-
-  virtual ~IOQueue() {}
-
-  virtual void Push(IO* io) = 0;
-  virtual IO* Pop() = 0;
+  WriteableCacheFile* const file_ = nullptr;  // File to write to
+  CacheWriteBuffer* const buf_ = nullptr;     // buffer to write
+  bool signal_ = false;                       // signal to processor
 };
 
-/**
- *
- *
- */
-class BlockingIOQueue : public IOQueue {
- public:
-  BlockingIOQueue() : cond_empty_(&lock_) {}
-
-  virtual ~BlockingIOQueue() {
-    for (auto* io : q_) {
-      delete io;
-    }
-    q_.clear();
-  }
-
-  void Push(IO* io) override {
-    MutexLock _(&lock_);
-    q_.push_back(io);
-    cond_empty_.SignalAll();
-  }
-
-  IO* Pop() override {
-    MutexLock _(&lock_);
-
-    while (q_.empty()) {
-      cond_empty_.Wait();
-    }
-
-    assert(!q_.empty());
-    lock_.AssertHeld();
-
-    IO* io = q_.front();
-    q_.pop_front();
-
-    return io;
-  }
-
- private:
-  port::Mutex lock_;
-  port::CondVar cond_empty_;
-  std::list<IOQueue::IO*> q_;
-};
 
 /**
- *
- *
+ * Abstraction to do writing to device. It is part of pipelined architecture.
  */
 class ThreadedWriter : public Writer {
  public:
-  ThreadedWriter(SecondaryCacheTier* const cache, Env* const env,
-                 const size_t qdepth = 1)
-      : Writer(cache),
-        env_(env),
-        qdepth_(qdepth),
-        q_(new BlockingIOQueue()),
-        cond_exit_(&th_lock_),
-        nthreads_(0) {
-    MutexLock _(&th_lock_);
-    for (size_t i = 0; i < qdepth_; ++i) {
-      ++nthreads_;
-      env_->StartThread(&ThreadedWriter::IOMain, this);
+  ThreadedWriter(SecondaryCacheTier* const cache, const size_t qdepth = 1)
+      : Writer(cache) {
+    for (size_t i = 0; i < qdepth; ++i) {
+      std::thread th(&ThreadedWriter::ThreadMain, this);
+      threads_.push_back(std::move(th));
     }
   }
 
-  virtual ~ThreadedWriter() {
-  }
+  virtual ~ThreadedWriter() {}
 
   void Stop() override {
-    MutexLock _(&th_lock_);
-    for (size_t i = 0; i < qdepth_; ++i) {
-      q_->Push(new IOQueue::IO(nullptr, nullptr));
+    // notify all threads to exit
+    for (size_t i = 0; i < threads_.size(); ++i) {
+      q_.Push(IO(/*signal=*/ true));
     }
 
-    while (nthreads_) {
-      cond_exit_.Wait();
+    // wait for all threads to exit
+    for (auto& th : threads_) {
+      th.join();
     }
   }
 
   void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) override {
-    q_->Push(new IOQueue::IO(file, buf));
+    q_.Push(IO(file, buf));
   }
 
  private:
-  static void IOMain(void* arg) {
-    auto* self = (ThreadedWriter*) arg;
+  /**
+   * Thread entry point.
+   */
+  void ThreadMain() {
     while (true) {
-      unique_ptr<IOQueue::IO> io(self->q_->Pop());
+      IO io(q_.Pop());
 
-      if (!io->file_) {
+      if (io.signal_) {
         // that's secret signal to exit
         break;
       }
 
-
-      WriteableCacheFile* const f = io->file_;
-      CacheWriteBuffer* const buf = io->buf_;
-
-      while(!self->cache_->Reserve(buf->Used())) {
+      while(!cache_->Reserve(io.buf_->Used())) {
+        // Why would we fail to reserve space ? IO error on disk is the only
+        // reasonable explanation
         sleep(1);
       }
 
-      Status s = f->file_->Append(Slice(buf->Data(), buf->Used()));
+      Slice data(io.buf_->Data(), io.buf_->Used());
+      Status s = io.file_->file_->Append(data);
       if (!s.ok()) {
-        // print error
+        // That is definite IO error to device. There is not much we can
+        // do but ignore the failure. This can lead to corruption of data (!)
         continue;
       }
-
       assert(s.ok());
-      f->BufferWriteDone(buf);
+      io.file_->BufferWriteDone(io.buf_);
     }
-
-    MutexLock _(&self->th_lock_);
-    --self->nthreads_;
-    self->cond_exit_.Signal();
   }
 
-  Env* env_;
-  const size_t qdepth_;
-  unique_ptr<IOQueue> q_;
-  port::Mutex th_lock_;
-  port::CondVar cond_exit_;
-  size_t nthreads_;
+  BoundedQueue<IO> q_;
+  std::vector<std::thread> threads_;
 };
 
 }  // namespace rocksdb
