@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cache/cache_tier.h"
+
 namespace rocksdb {
 
 /**
@@ -15,9 +17,7 @@ class SecondaryCacheTierCloak : public PrimaryCacheTier {
   explicit SecondaryCacheTierCloak(std::unique_ptr<SecondaryCacheTier>&& cache)
     : cache_(std::move(cache)) {}
 
-  virtual ~SecondaryCacheTierCloak() {
-    cache_->Close();
-  }
+  virtual ~SecondaryCacheTierCloak() {}
 
   /*
    * Handle abstraction to support raw pointers and blocks
@@ -144,6 +144,11 @@ class SecondaryCacheTierCloak : public PrimaryCacheTier {
     cache_->Erase(key);
   }
 
+  Status Close() override {
+    cache_->Close();
+    return Status::OK();
+  }
+
   // Return the size of the handle
   size_t GetUsage(Handle* handle) const override {
     return ((HandleBase*) handle)->size_;
@@ -160,6 +165,11 @@ class SecondaryCacheTierCloak : public PrimaryCacheTier {
   size_t GetPinnedUsage() const override { assert(!"not implemented"); }
   void ApplyToAllCacheEntries(void (*)(void*, size_t), bool) override {
     assert(!"not implemented");
+  }
+
+  // Print Stats
+  std::string PrintStats() override {
+    return cache_->PrintStats();
   }
 
   //

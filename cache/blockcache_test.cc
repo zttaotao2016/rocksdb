@@ -34,6 +34,7 @@ std::unique_ptr<SecondaryCacheTier> NewBlockCache(
   std::shared_ptr<Logger> log(new ConsoleLogger());
   BlockCacheOptions opt(env, path, max_size, log);
   opt.cache_file_size = max_file_size;
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
   std::unique_ptr<SecondaryCacheTier> scache(new BlockCacheImpl(opt));
   Status s = scache->Open();
   assert(s.ok());
@@ -65,8 +66,13 @@ class BlockCacheImplTest : public testing::Test {
   }
 
   virtual ~BlockCacheImplTest() {
-    if (scache_ ){
+    if (scache_ ) {
       Status s = scache_->Close();
+      assert(s.ok());
+    }
+
+    if (pcache_) {
+      Status s = pcache_->Close();
       assert(s.ok());
     }
   }
@@ -421,7 +427,7 @@ class BlkCacheDBTest : public DBTestBase {
   std::shared_ptr<PrimaryCacheTier> MakeSecondaryCacheTierCloak() {
     std::unique_ptr<SecondaryCacheTier> scache(
       std::move(NewBlockCache(env_,  test::TmpDir(env_) + "/block_cache")));
-    return std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
+   return std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
   }
 
   std::shared_ptr<PrimaryCacheTier> MakeVolatileCache() {
@@ -433,13 +439,12 @@ class BlkCacheDBTest : public DBTestBase {
     return tcache_->GetCache();
   }
 
-  void RunTest(std::function<std::shared_ptr<PrimaryCacheTier>()> new_cache) {
+  void RunTest(
+    const std::function<std::shared_ptr<PrimaryCacheTier>()>& new_cache) {
     if (!Snappy_Supported()) {
       return;
     }
     int num_iter = 100 * 1024;
-
-    auto block_cache = new_cache();
 
     // Run this test three iterations.
     // Iteration 1: only a uncompressed block cache
@@ -452,6 +457,8 @@ class BlkCacheDBTest : public DBTestBase {
       options.write_buffer_size = 64*1024;        // small write buffer
       options.statistics = rocksdb::CreateDBStatistics();
       options = CurrentOptions(options);
+
+      auto block_cache = new_cache();
 
       BlockBasedTableOptions table_options;
       switch (iter) {
@@ -539,9 +546,10 @@ class BlkCacheDBTest : public DBTestBase {
 
       options.create_if_missing = true;
       DestroyAndReopen(options);
-    }
 
-    block_cache->Flush_TEST();
+      block_cache->Flush_TEST();
+      block_cache->Close();
+    }
   }
 
   std::unique_ptr<TieredCache> tcache_;

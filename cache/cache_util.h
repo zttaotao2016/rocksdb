@@ -1,6 +1,7 @@
 #pragma once
 
 #include <list>
+#include <sys/time.h>
 
 #include "include/rocksdb/env.h"
 #include "port/port_posix.h"
@@ -70,5 +71,31 @@ class BoundedQueue {
   size_t size_ = 0;
   const size_t max_size_ = UINT64_MAX;
 };
+
+/**
+ * Simple timer implementation to calculate latency
+ * TODO: Find a replacement
+ */
+class Timer {
+ public:
+  uint64_t ElapsedMicroSec() const {
+    return NowInMicroSec() - start_;
+  }
+
+  uint64_t ElapsedSec() const {
+    return (NowInMicroSec() - start_) / 1000000;
+  }
+
+ private:
+  uint64_t NowInMicroSec() const {
+    timeval tv;
+    gettimeofday(&tv, /*tz=*/ nullptr);
+    return tv.tv_sec * 1000000 + tv.tv_usec;
+  }
+
+  const uint64_t start_ = NowInMicroSec();
+};
+
+
 
 }

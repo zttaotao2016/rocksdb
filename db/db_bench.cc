@@ -4070,7 +4070,7 @@ int main(int argc, char** argv) {
     FLAGS_stats_interval = 1000;
   }
 
-  std::shared_ptr<rocksdb::TieredCache> tcache;
+  std::unique_ptr<rocksdb::TieredCache> tcache;
   std::shared_ptr<rocksdb::Cache> cache;
   if (FLAGS_cache_size >= 0) {
     if (FLAGS_enable_tiered_block_cache) {
@@ -4080,8 +4080,8 @@ int main(int argc, char** argv) {
       assert(s.ok());
       rocksdb::BlockCacheOptions opt(FLAGS_env, FLAGS_block_cache_path,
                                      FLAGS_block_cache_size, log);
-      s = rocksdb::TieredCache::NewTieredCache(FLAGS_cache_size, opt, &tcache);
-      assert(s.ok());
+      tcache = std::move(rocksdb::TieredCache::New(FLAGS_cache_size, opt));
+      assert(tcache);
       cache = tcache->GetCache();
     } else if (FLAGS_cache_numshardbits >= 1) {
       cache = rocksdb::NewLRUCache(FLAGS_cache_size, FLAGS_cache_numshardbits);
