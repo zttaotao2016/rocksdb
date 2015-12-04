@@ -6,6 +6,7 @@
 #include <string>
 #include <stdexcept>
 #include <thread>
+#include <sstream>
 
 #include "cache/blockcache_file.h"
 #include "cache/blockcache_metadata.h"
@@ -21,6 +22,7 @@
 #include "util/coding.h"
 #include "util/crc32c.h"
 #include "util/mutexlock.h"
+#include "util/histogram.h"
 
 namespace rocksdb {
 
@@ -79,6 +81,20 @@ struct BlockCacheOptions {
   uint32_t writer_qdepth = 2;
 
   /**
+   * Pipeline writes. The write will be delayed and asynchronous. This helps
+   * avoid regression in the eviction code path of the primary tier
+   */
+  bool pipeline_writes_ = true;
+
+  /**
+   * Max pipeline buffer size. This is the maximum backlog we can accumulate
+   * while waiting for writes.
+   *
+   * Default: 1GiB
+   */
+  uint64_t max_write_pipeline_backlog_size = 1ULL * 1024 * 1024 * 1024;
+
+  /**
    * IO size to block device
    */
   uint32_t write_buffer_size = 1 * 1024 * 1024;
@@ -105,8 +121,9 @@ struct BlockCacheOptions {
 class BlockCacheImpl : public SecondaryCacheTier {
  public:
   BlockCacheImpl(const BlockCacheOptions& opt)
-    : insert_th_(&BlockCacheImpl::InsertMain, this),
-      opt_(opt),
+    : opt_(opt),
+      insert_ops_(opt_.max_write_pipeline_backlog_size),
+      insert_th_(&BlockCacheImpl::InsertMain, this),
       writer_(this, opt_.writer_qdepth) {
     Info(opt_.log, "Initializing allocator. size=%d B count=%d limit=%d B",
          opt_.write_buffer_size, opt_.write_buffer_count,
@@ -131,7 +148,23 @@ class BlockCacheImpl : public SecondaryCacheTier {
   bool Reserve(const size_t size) override;
   Status Close() override;
 
-  virtual void Flush_TEST() override {
+  std::string PrintStats() override {
+    std::ostringstream os;
+    os << "Blockcache stats: " << std::endl
+       << "* bytes piplined: " << std::endl
+       << stats_.bytes_pipelined_.ToString() << std::endl
+       << "* bytes written:" << std::endl
+       << stats_.bytes_written_.ToString() << std::endl
+       << "* bytes read:" << std::endl
+       << stats_.bytes_read_.ToString() << std::endl
+       << "* cache_hits:" << std::endl
+       << stats_.cache_hits_ << std::endl
+       << "* cache_misses:" << std::endl
+       << stats_.cache_misses_ << std::endl;
+    return os.str();
+  }
+
+  void Flush_TEST() override {
     while (insert_ops_.Size()) {
       sleep(1);
     }
@@ -172,16 +205,25 @@ class BlockCacheImpl : public SecondaryCacheTier {
   // Get cache directory path
   std::string GetCachePath() const { return opt_.path + "/cache"; }
 
+  struct Stats {
+    HistogramImpl bytes_pipelined_;
+    HistogramImpl bytes_written_;
+    HistogramImpl bytes_read_;
+    uint64_t cache_hits_ = 0;
+    uint64_t cache_misses_ = 0;
+  };
+
   port::RWMutex lock_;                  // Synchronization
+  const BlockCacheOptions opt_;         // BlockCache options
   BoundedQueue<InsertOp> insert_ops_;   // Ops waiting for insert
   std::thread insert_th_;               // Insert thread
-  const BlockCacheOptions opt_;         // BlockCache options
   uint32_t writerCacheId_ = 0;          // Current cache file identifier
   WriteableCacheFile* cacheFile_ = nullptr;   // Current cache file reference
   CacheWriteBufferAllocator bufferAllocator_; // Buffer provider
   ThreadedWriter writer_;               // Writer threads
   BlockCacheMetadata metadata_;         // Cache meta data manager
   std::atomic<uint64_t> size_{0};       // Size of the cache
+  Stats stats_;                         // Statistics
 };
 
 }  // namespace rocksdb

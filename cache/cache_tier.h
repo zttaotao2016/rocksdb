@@ -37,6 +37,12 @@ class CacheTier {
    */
   virtual Status Close() = 0;
 
+  /**
+   * Print stats as string
+   */
+  virtual std::string PrintStats() { return std::string(); }
+
+
   // TEST: Flush data
   virtual void Flush_TEST() = 0;
 };
@@ -116,20 +122,15 @@ class TieredCache {
     pcache_->next_tier_ = std::move(scache);
   }
 
-  virtual ~TieredCache() {
-    if (pcache_) {
-      pcache_->Close();
-    }
-  }
+  virtual ~TieredCache() {}
 
   std::shared_ptr<PrimaryCacheTier> GetCache() { return pcache_; }
 
   /**
    * Factory method for creating tiered cache
    */
-  static Status NewTieredCache(const size_t mem_size,
-                               const BlockCacheOptions& options,
-                               std::shared_ptr<TieredCache>* tcache);
+  static std::unique_ptr<TieredCache> New(const size_t mem_size,
+                                          const BlockCacheOptions& options);
 
  private:
   std::shared_ptr<PrimaryCacheTier> pcache_;

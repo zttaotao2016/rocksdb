@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <sstream>
 
 #include "include/rocksdb/cache.h"
 #include "cache/cache_tier.h"
@@ -35,6 +36,18 @@ class VolatileCache : public PrimaryCacheTier {
   size_t GetCapacity() const override { return size_; }
   size_t GetUsage(Handle* handle) const override {
     return ((CacheObject*) handle)->Size();
+  }
+
+  // Print stats
+  std::string PrintStats() override {
+    std::ostringstream ss;
+    ss << "Volatile cache stats: " << std::endl
+       << "* cache hits: " << stats_.cache_hits_ << std::endl
+       << "* cache misses: " << stats_.cache_misses_ << std::endl;
+    if (next_tier_) {
+      ss << next_tier_->PrintStats();
+    }
+    return std::move(ss.str());
   }
 
   /*
@@ -158,7 +171,13 @@ class VolatileCache : public PrimaryCacheTier {
     }
   };
 
-  typedef EvictableHashTable<CacheObject, CacheObjectHash, CacheObjectEqual> IndexType;
+  typedef EvictableHashTable<CacheObject, CacheObjectHash,
+                             CacheObjectEqual> IndexType;
+
+  struct Stats {
+    uint64_t cache_misses_ = 0;
+    uint64_t cache_hits_ = 0;
+  };
 
   // Evict LRU tail
   bool Evict();
@@ -166,6 +185,7 @@ class VolatileCache : public PrimaryCacheTier {
   IndexType index_;                     // in-memory cache
   std::atomic<uint64_t> max_size_;      // Maximum size of the cache
   std::atomic<uint64_t> size_;          // Size of the cache
+  Stats stats_;
 };
 
 }  // namespace rocksdb

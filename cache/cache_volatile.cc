@@ -111,6 +111,7 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
     bool status = index_.Find(&lookup_key, &obj);
     if (status) {
       assert(obj->refs_);
+      stats_.cache_hits_++;
       return obj;
     }
   }
@@ -122,6 +123,7 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
     size_t size;
     if (!next_tier_->Lookup(key, &data, &size)) {
       // data is not there in the secondary tier
+      stats_.cache_misses_++;
       return nullptr;
     }
 
@@ -132,9 +134,11 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
     Block *block = Block::NewBlock(std::move(data), size);
     assert(block);
     assert(block->size() == size);
+    stats_.cache_hits_++;
     return InsertBlock(key, block, &DeleteBlock);
   }
 
+  stats_.cache_misses_++;
   return nullptr;
 }
 

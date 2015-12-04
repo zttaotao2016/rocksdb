@@ -59,11 +59,21 @@ Status BlockCacheImpl::Close() {
 }
 
 Status BlockCacheImpl::Insert(const Slice& key, void* data, const size_t size) {
+  // update stats
+  stats_.bytes_pipelined_.Add(size);
+
   std::unique_ptr<char[]> tmp(new char[size]);
   memcpy(tmp.get(), data, size);
-  insert_ops_.Push(InsertOp(key.ToString(), std::move(tmp), size));
-  assert(!tmp);
-  return Status::OK();
+
+  if (opt_.pipeline_writes_) {
+    // off load the write to the write thread
+    insert_ops_.Push(InsertOp(std::move(key.ToString()), std::move(tmp), size));
+    assert(!tmp);
+    return Status::OK();
+  }
+
+  assert(!opt_.pipeline_writes_);
+  return InsertImpl(key, tmp, size);
 }
 
 void BlockCacheImpl::InsertMain() {
@@ -106,11 +116,15 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
     NewCacheFile();
   }
 
+  // Insert into lookup index
   BlockInfo* info = new BlockInfo(key, lba);
   cacheFile_->Add(info);
   bool status = metadata_.Insert(info);
   (void) status;
   assert(status);
+
+  // update stats
+  stats_.bytes_written_.Add(size);
 
   return Status::OK();
 }
@@ -132,6 +146,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   if (!file) {
     // this can happen because the block index and cache file index are
     // different, and the cache file might be removed between the two lookups
+    stats_.cache_misses_++;
     return false;
   }
 
@@ -145,6 +160,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   --file->refs_;
   if (!status) {
     assert(!"Unexpected error looking up cache");
+    stats_.cache_misses_++;
     return false;
   }
 
@@ -153,6 +169,9 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   val->reset(new char[blk_val.size()]);
   memcpy(val->get(), blk_val.data(), blk_val.size());
   *size = blk_val.size();
+
+  stats_.bytes_read_.Add(*size);
+  stats_.cache_hits_++;
 
   return true;
 }
