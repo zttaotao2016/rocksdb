@@ -19,6 +19,10 @@ using namespace std;
 namespace rocksdb {
 
 struct HashTableTest : public testing::Test {
+  ~HashTableTest() {
+    map_.Clear(&HashTableTest::ClearNode);
+  }
+
   struct Node {
     Node(const uint64_t key = 0, const std::string& val = std::string())
       : key_(key), val_(val) {}
@@ -38,6 +42,8 @@ struct HashTableTest : public testing::Test {
       return std::hash<uint64_t>()(node.key_);
     }
   };
+
+  static void ClearNode(Node node) {}
 
   HashTable<Node, Hash, Equal> map_;
 };
