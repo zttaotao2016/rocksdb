@@ -34,6 +34,7 @@ enum InfoLogLevel : unsigned char;
 class FilterPolicy;
 class Logger;
 class MergeOperator;
+class PageCache;
 class Snapshot;
 class TableFactory;
 class MemTableRepFactory;
@@ -1217,6 +1218,26 @@ struct CompactionOptions {
       : compression(kSnappyCompression),
         output_file_size_limit(std::numeric_limits<uint64_t>::max()) {}
 };
+// Page Cache Options
+//
+// The describe the caching behavior for page cache
+struct PageCacheOptions {
+  PageCacheOptions() {}
+  explicit PageCacheOptions(const std::shared_ptr<PageCache>& _page_cache,
+                            const std::string _key_prefix,
+                            Statistics* const _statistics)
+    : page_cache(_page_cache), key_prefix(_key_prefix),
+      statistics(_statistics) {}
+
+  virtual ~PageCacheOptions() {}
+
+  PageCacheOptions& operator=(const PageCacheOptions&) = default;
+
+  std::shared_ptr<PageCache> page_cache;
+  std::string key_prefix;
+  Statistics* statistics = nullptr;
+};
+
 }  // namespace rocksdb
 
 #endif  // STORAGE_ROCKSDB_INCLUDE_OPTIONS_H_

@@ -50,7 +50,7 @@ class CacheTier {
 /**
  * Secondary cache tier only supports storage/retrieval of raw data
  */
-class SecondaryCacheTier : public CacheTier {
+class SecondaryCacheTier : public CacheTier, public PageCache {
  public:
   typedef LogicalBlockAddress LBA;
 
@@ -60,17 +60,6 @@ class SecondaryCacheTier : public CacheTier {
    * Create or open an existing cache
    */
   virtual Status Open() = 0;
-
-  /**
-   * Insert key value into the cache
-   */
-  virtual Status Insert(const Slice& key, void* data, const size_t size) = 0;
-
-  /**
-   * Lookup a given key in the cache
-   */
-  virtual bool Lookup(const Slice & key, std::unique_ptr<char[]>* val,
-                      size_t* size) = 0;
 
   /**
    * Remove a given key from the cache

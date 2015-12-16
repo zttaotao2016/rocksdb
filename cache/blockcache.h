@@ -141,9 +141,9 @@ class BlockCacheImpl : public SecondaryCacheTier {
   /*
    * override from SecondaryCacheTier
    */
-  Status Insert(const Slice& key, void* data, const size_t size) override;
-  bool Lookup(const Slice & key, std::unique_ptr<char[]>* data,
-              size_t* size) override;
+  Status Insert(const Slice& key, const void* data, const size_t size);
+  Status Lookup(const Slice & key, std::unique_ptr<char[]>* data,
+                size_t* size);
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
   Status Close() override;

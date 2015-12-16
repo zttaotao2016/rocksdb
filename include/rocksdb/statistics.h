@@ -48,6 +48,11 @@ enum Tickers : uint32_t {
   // # of times bloom filter has avoided file reads.
   BLOOM_FILTER_USEFUL,
 
+  // # page cache hit
+  PAGE_CACHE_HIT,
+  // # page cache miss
+  PAGE_CACHE_MISS,
+
   // # of memtable hits.
   MEMTABLE_HIT,
   // # of memtable misses.

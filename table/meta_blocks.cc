@@ -145,7 +145,7 @@ Status ReadProperties(const Slice &handle_value, RandomAccessFile *file,
   read_options.verify_checksums = false;
   Status s;
   s = ReadBlockContents(file, footer, read_options, handle, &block_contents,
-                        env, false);
+                        env, false /* decompress */, PageCacheOptions());
 
   if (!s.ok()) {
     return s;
@@ -232,7 +232,8 @@ Status ReadTableProperties(RandomAccessFile* file, uint64_t file_size,
   ReadOptions read_options;
   read_options.verify_checksums = false;
   s = ReadBlockContents(file, footer, read_options, metaindex_handle,
-                        &metaindex_contents, env, false);
+                        &metaindex_contents, env, false /* decompress */,
+                        PageCacheOptions());
   if (!s.ok()) {
     return s;
   }
@@ -286,7 +287,8 @@ Status FindMetaBlock(RandomAccessFile* file, uint64_t file_size,
   ReadOptions read_options;
   read_options.verify_checksums = false;
   s = ReadBlockContents(file, footer, read_options, metaindex_handle,
-                        &metaindex_contents, env, false);
+                        &metaindex_contents, env, false /* do decompression */,
+                        PageCacheOptions());
   if (!s.ok()) {
     return s;
   }
@@ -315,7 +317,8 @@ Status ReadMetaBlock(RandomAccessFile* file, uint64_t file_size,
   ReadOptions read_options;
   read_options.verify_checksums = false;
   status = ReadBlockContents(file, footer, read_options, metaindex_handle,
-                             &metaindex_contents, env, false);
+                             &metaindex_contents, env, false /* decompress */,
+                             PageCacheOptions());
   if (!status.ok()) {
     return status;
   }
@@ -335,7 +338,7 @@ Status ReadMetaBlock(RandomAccessFile* file, uint64_t file_size,
 
   // Reading metablock
   return ReadBlockContents(file, footer, read_options, block_handle, contents,
-                           env, false);
+                           env, false /* decompress */, PageCacheOptions());
 }
 
 }  // namespace rocksdb
