@@ -116,7 +116,7 @@ class SecondaryCacheTierCloak : public PrimaryCacheTier {
 
     unique_ptr<char[]> data;
     size_t size;
-    if (!cache_->Lookup(key, &data, &size)) {
+    if (!cache_->Lookup(key, &data, &size).ok()) {
       return nullptr;
     }
 

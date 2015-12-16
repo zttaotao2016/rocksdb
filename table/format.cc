@@ -14,6 +14,7 @@
 
 #include "rocksdb/env.h"
 #include "table/block.h"
+#include "table/block_based_table_reader.h"
 #include "util/coding.h"
 #include "util/compression.h"
 #include "util/crc32c.h"
@@ -300,10 +301,123 @@ Status ReadBlock(RandomAccessFileReader* file, const Footer& footer,
 
 }  // namespace
 
+void UpdateRawPageCache(const PageCacheOptions& cache_options,
+                        const BlockHandle& handle, const void* data,
+                        const size_t size) {
+  if (!cache_options.page_cache
+      || cache_options.page_cache->type() != PageCache::Type::RAW) {
+    // We should not cache this. Either
+    // (1) Page cache is not available
+    // (2) Page cache is not configured to cache raw data
+    return;
+  }
+
+  // construct the page key
+  char cache_key[BlockBasedTable::kMaxCacheKeyPrefixSize + kMaxVarint64Length];
+  auto key = BlockBasedTable::GetCacheKey(cache_options.key_prefix.c_str(),
+                                          cache_options.key_prefix.size(),
+                                          handle, cache_key);
+  // insert content to cache
+  cache_options.page_cache->Insert(key, data, size);
+}
+
+void UpdateUncompressedPageCache(const PageCacheOptions& cache_options,
+                                 const BlockHandle& handle,
+                                 const BlockContents& contents) {
+  if (!contents.cachable || contents.compression_type != kNoCompression
+      || !cache_options.page_cache
+      || cache_options.page_cache->type() != PageCache::Type::UNCOMPRESSED) {
+    // We shouldn't cache this. Either
+    // (1) content is not cacheable or compressed
+    // (2) there is no page cache provided
+    // (3) page cache is not configured for uncompressed objects
+    return;
+  }
+
+  // construct the page key
+  char cache_key[BlockBasedTable::kMaxCacheKeyPrefixSize + kMaxVarint64Length];
+  auto key = BlockBasedTable::GetCacheKey(cache_options.key_prefix.c_str(),
+                                          cache_options.key_prefix.size(),
+                                          handle, cache_key);
+  // insert block contents to page cache
+  cache_options.page_cache->Insert(key, contents.data.data(),
+                                   contents.data.size());
+}
+
+Status LookupRawPage(const PageCacheOptions& cache_options,
+                     const BlockHandle& handle,
+                     std::unique_ptr<char[]>* raw_data,
+                     const size_t raw_data_size) {
+  if (!cache_options.page_cache
+      || cache_options.page_cache->type() != PageCache::Type::RAW) {
+    // We should not lookup. Either
+    // (1) There is no cache
+    // (2) The cache is not configured for raw data
+    return Status::NotSupported();
+  }
+
+  // construct the page key
+  char cache_key[BlockBasedTable::kMaxCacheKeyPrefixSize + kMaxVarint64Length];
+  auto key = BlockBasedTable::GetCacheKey(cache_options.key_prefix.c_str(),
+                                          cache_options.key_prefix.size(),
+                                          handle, cache_key);
+  // Lookup page
+  size_t size;
+  Status s = cache_options.page_cache->Lookup(key, raw_data, &size);
+  if (!s.ok()) {
+    // cache miss
+    RecordTick(cache_options.statistics, PAGE_CACHE_MISS);
+    return s;
+  }
+
+  // cache hit
+  assert(raw_data_size == handle.size() + kBlockTrailerSize);
+  assert(size == raw_data_size);
+  RecordTick(cache_options.statistics, PAGE_CACHE_HIT);
+  return Status::OK();
+}
+
+Status LookupUncompressedPage(const PageCacheOptions& cache_options,
+                              const BlockHandle& handle,
+                              BlockContents* contents) {
+  if (!contents || !cache_options.page_cache
+      || cache_options.page_cache->type() != PageCache::Type::UNCOMPRESSED) {
+    // We shouldn't lookup in the cache. Either
+    // (1) Nowhere to store
+    // (2) Page cache is not provided
+    // (3) Page cache is not configured for uncompressed data
+    return Status::NotSupported();
+  }
+
+  // construct the page key
+  char cache_key[BlockBasedTable::kMaxCacheKeyPrefixSize + kMaxVarint64Length];
+  auto key = BlockBasedTable::GetCacheKey(cache_options.key_prefix.c_str(),
+                                          cache_options.key_prefix.size(),
+                                          handle, cache_key);
+  // Lookup page
+  std::unique_ptr<char[]> data;
+  size_t size;
+  Status s = cache_options.page_cache->Lookup(key, &data, &size);
+  if (!s.ok()) {
+    // cache miss
+    RecordTick(cache_options.statistics, PAGE_CACHE_MISS);
+    return s;
+  }
+
+  // update stats
+  RecordTick(cache_options.statistics, PAGE_CACHE_HIT);
+  // construct result and return
+  *contents = BlockContents(std::move(data), size, false /*cacheable*/,
+                            kNoCompression);
+  return Status::OK();
+}
+
 Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
-                         const ReadOptions& options, const BlockHandle& handle,
+                         const ReadOptions& read_options,
+                         const BlockHandle& handle,
                          BlockContents* contents, Env* env,
-                         bool decompression_requested) {
+                         bool decompression_requested,
+                         const PageCacheOptions& cache_options) {
   Status status;
   Slice slice;
   size_t n = static_cast<size_t>(handle.size());
@@ -312,17 +426,37 @@ Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
   char* used_buf = nullptr;
   rocksdb::CompressionType compression_type;
 
-  if (decompression_requested &&
-      n + kBlockTrailerSize < DefaultStackBufferSize) {
-    // If we've got a small enough hunk of data, read it in to the
-    // trivially allocated stack buffer instead of needing a full malloc()
-    used_buf = &stack_buf[0];
-  } else {
-    heap_buf = std::unique_ptr<char[]>(new char[n + kBlockTrailerSize]);
-    used_buf = heap_buf.get();
+  if (LookupUncompressedPage(cache_options, handle, contents).ok()) {
+    // uncompressed page is found for the block handle
+    return Status::OK();
   }
 
-  status = ReadBlock(file, footer, options, handle, &slice, used_buf);
+  status = LookupRawPage(cache_options, handle, &heap_buf,
+                         n + kBlockTrailerSize);
+  if (status.ok()) {
+    // cache hit
+    used_buf = heap_buf.get();
+    slice = Slice(heap_buf.get(), n);
+  } else {
+    // cache miss read from device
+    if (decompression_requested &&
+        n + kBlockTrailerSize < DefaultStackBufferSize) {
+      // If we've got a small enough hunk of data, read it in to the
+      // trivially allocated stack buffer instead of needing a full malloc()
+      used_buf = &stack_buf[0];
+    } else {
+      heap_buf = std::unique_ptr<char[]>(new char[n + kBlockTrailerSize]);
+      used_buf = heap_buf.get();
+    }
+
+    status = ReadBlock(file, footer, read_options, handle, &slice, used_buf);
+
+    if (status.ok() && read_options.fill_cache) {
+      // insert to raw cache
+      UpdateRawPageCache(cache_options, handle, used_buf,
+                         n + kBlockTrailerSize);
+    }
+  }
 
   if (!status.ok()) {
     return status;
@@ -333,7 +467,13 @@ Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
   compression_type = static_cast<rocksdb::CompressionType>(slice.data()[n]);
 
   if (decompression_requested && compression_type != kNoCompression) {
-    return UncompressBlockContents(slice.data(), n, contents, footer.version());
+    status = UncompressBlockContents(slice.data(), n, contents,
+                                     footer.version());
+    if (status.ok() && read_options.fill_cache) {
+      // update cache with the uncompressed data
+      UpdateUncompressedPageCache(cache_options, handle, *contents);
+    }
+    return status;
   }
 
   if (slice.data() != used_buf) {
@@ -347,6 +487,12 @@ Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
   }
 
   *contents = BlockContents(std::move(heap_buf), n, true, compression_type);
+
+  if (read_options.fill_cache) {
+    // insert to uncompressed cache
+    UpdateUncompressedPageCache(cache_options, handle, *contents);
+  }
+
   return status;
 }
 
@@ -440,6 +586,7 @@ Status UncompressBlockContents(const char* data, size_t n,
     default:
       return Status::Corruption("bad block type");
   }
+
   return Status::OK();
 }
 

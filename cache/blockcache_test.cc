@@ -209,13 +209,13 @@ class BlockCacheImplTest : public testing::Test {
       size_t block_size;
 
       if (eviction_enabled) {
-        if (!scache_->Lookup(key, &block, &block_size)) {
+        if (!scache_->Lookup(key, &block, &block_size).ok()) {
           // assume that the key is evicted
           continue;
         }
       }
 
-      ASSERT_TRUE(scache_->Lookup(key, &block, &block_size));
+      ASSERT_OK(scache_->Lookup(key, &block, &block_size));
       ASSERT_TRUE(block_size == sizeof(edata));
       ASSERT_TRUE(memcmp(edata, block.get(), sizeof(edata)) == 0);
     }
@@ -430,6 +430,11 @@ class BlkCacheDBTest : public DBTestBase {
    return std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
   }
 
+  std::shared_ptr<SecondaryCacheTier> MakePageCache() {
+    return std::unique_ptr<SecondaryCacheTier>(
+      std::move(NewBlockCache(env_,  test::TmpDir(env_) + "/page_cache")));
+  }
+
   std::shared_ptr<PrimaryCacheTier> MakeVolatileCache() {
     return std::shared_ptr<PrimaryCacheTier>(new VolatileCache());
   }
@@ -452,15 +457,17 @@ class BlkCacheDBTest : public DBTestBase {
     // Iteration 3: both block cache and compressed cache
     // Iteration 4: both block cache and compressed cache, but DB is not
     // compressed
-    for (int iter = 0; iter < 3; iter++) {
+    for (int iter = 0; iter < 5; iter++) {
       Options options;
       options.write_buffer_size = 64*1024;        // small write buffer
       options.statistics = rocksdb::CreateDBStatistics();
       options = CurrentOptions(options);
 
       auto block_cache = new_cache();
+      auto page_cache = MakePageCache();
 
       BlockBasedTableOptions table_options;
+      table_options.page_cache = page_cache;
       switch (iter) {
         case 0:
           // only uncompressed block cache
@@ -481,6 +488,19 @@ class BlkCacheDBTest : public DBTestBase {
           table_options.block_cache_compressed = NewLRUCache(8 * 1024 * 1024);
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           options.compression = kNoCompression;
+          break;
+        case 3:
+          // no block cache or compressed cache
+          table_options.block_cache = nullptr;
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 4:
+          // no block cache or compressed cache
+          table_options.block_cache = nullptr;
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          page_cache->type() = PageCache::Type::RAW;
           break;
         default:
           ASSERT_TRUE(false);
@@ -513,10 +533,14 @@ class BlkCacheDBTest : public DBTestBase {
 
       // flush all data from memtable so that reads are from block cache
       ASSERT_OK(Flush(1));
+      // flush all data in cache to device
       block_cache->Flush_TEST();
+      page_cache->Flush_TEST();
 
-      for (int i = 0; i < num_iter; i++) {
-        ASSERT_EQ(Get(1, Key(i)), values[i]);
+      for (int j = 0; j < 2; ++j) {
+        for (int i = 0; i < num_iter; i++) {
+          ASSERT_EQ(Get(1, Key(i)), values[i]);
+        }
       }
 
       // check that we triggered the appropriate code paths in the cache
@@ -540,6 +564,18 @@ class BlkCacheDBTest : public DBTestBase {
           // storage
           ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
           break;
+        case 3:
+          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_HIT), 0);
+          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_MISS), 0);
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          break;
+        case 4:
+          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_HIT), 0);
+          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_MISS), 0);
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
+          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          break;
         default:
           ASSERT_TRUE(false);
       }
@@ -549,6 +585,7 @@ class BlkCacheDBTest : public DBTestBase {
 
       block_cache->Flush_TEST();
       block_cache->Close();
+      page_cache->Close();
     }
   }
 

@@ -20,6 +20,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "rocksdb/page_cache.h"
 #include "rocksdb/env.h"
 #include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
@@ -96,6 +97,10 @@ struct BlockBasedTableOptions {
   // If non-NULL use the specified cache for blocks.
   // If NULL, rocksdb will automatically create and use an 8MB internal cache.
   std::shared_ptr<Cache> block_cache = nullptr;
+
+  // If non-NULL use the specified cache for pages read from device
+  // IF NULL, no page cache is used
+  std::shared_ptr<PageCache> page_cache = nullptr;
 
   // If non-NULL use the specified cache for compressed blocks.
   // If NULL, rocksdb will not use a compressed block cache.

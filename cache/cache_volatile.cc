@@ -121,7 +121,7 @@ Cache::Handle* VolatileCache::Lookup(const Slice& key) {
     // lookup in the secondary cache;
     std::unique_ptr<char[]> data;
     size_t size;
-    if (!next_tier_->Lookup(key, &data, &size)) {
+    if (!next_tier_->Lookup(key, &data, &size).ok()) {
       // data is not there in the secondary tier
       stats_.cache_misses_++;
       return nullptr;

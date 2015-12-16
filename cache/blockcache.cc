@@ -58,7 +58,8 @@ Status BlockCacheImpl::Close() {
   return Status::OK();
 }
 
-Status BlockCacheImpl::Insert(const Slice& key, void* data, const size_t size) {
+Status BlockCacheImpl::Insert(const Slice& key, const void* data,
+                              const size_t size) {
   // update stats
   stats_.bytes_pipelined_.Add(size);
 
@@ -129,8 +130,8 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
   return Status::OK();
 }
 
-bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
-                            size_t* size)
+Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
+                              size_t* size)
 {
   // ReadLock _(&lock_);
 
@@ -138,8 +139,8 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   bool status;
   status = metadata_.Lookup(key, &lba);
   if (!status) {
-    Info(opt_.log, "Error looking up index for key %s", key.ToString().c_str());
-    return status;
+    stats_.cache_misses_++;
+    return Status::NotFound("Key not found in index");
   }
 
   BlockCacheFile* const file = metadata_.Lookup(lba.cache_id_);
@@ -147,7 +148,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
     // this can happen because the block index and cache file index are
     // different, and the cache file might be removed between the two lookups
     stats_.cache_misses_++;
-    return false;
+    return Status::NotFound("Cache file not found");
   }
 
   assert(file->refs_);
@@ -158,10 +159,10 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
 
   status = file->Read(lba, &blk_key, &blk_val, scratch.get());
   --file->refs_;
+  assert(status);
   if (!status) {
-    assert(!"Unexpected error looking up cache");
     stats_.cache_misses_++;
-    return false;
+    return Status::NotFound("Error reading data");
   }
 
   assert(blk_key == key);
@@ -173,7 +174,7 @@ bool BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   stats_.bytes_read_.Add(*size);
   stats_.cache_hits_++;
 
-  return true;
+  return Status::OK();
 }
 
 bool BlockCacheImpl::Erase(const Slice& key) {
