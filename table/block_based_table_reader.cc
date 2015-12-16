@@ -792,7 +792,7 @@ FilterBlockReader* BlockBasedTable::ReadFilter(
       if (!ReadBlockContents(rep->file.get(), rep->footer, ReadOptions(),
                              rep->filter_handle, &block, rep->ioptions.env,
                              false /* decompress */,
-                            rep->page_cache_options).ok()) {
+                             rep->page_cache_options).ok()) {
         // Error reading the block
         return nullptr;
       }

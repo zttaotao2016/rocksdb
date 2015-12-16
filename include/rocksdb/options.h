@@ -1218,6 +1218,7 @@ struct CompactionOptions {
       : compression(kSnappyCompression),
         output_file_size_limit(std::numeric_limits<uint64_t>::max()) {}
 };
+
 // Page Cache Options
 //
 // The describe the caching behavior for page cache
