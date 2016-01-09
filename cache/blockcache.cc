@@ -140,7 +140,7 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   status = metadata_.Lookup(key, &lba);
   if (!status) {
     stats_.cache_misses_++;
-    return Status::NotFound("Key not found in index");
+    return Status::NotFound("blockcache: key not found");
   }
 
   BlockCacheFile* const file = metadata_.Lookup(lba.cache_id_);
@@ -148,7 +148,7 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
     // this can happen because the block index and cache file index are
     // different, and the cache file might be removed between the two lookups
     stats_.cache_misses_++;
-    return Status::NotFound("Cache file not found");
+    return Status::NotFound("blockcache: cache file not found");
   }
 
   assert(file->refs_);
@@ -162,7 +162,7 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   assert(status);
   if (!status) {
     stats_.cache_misses_++;
-    return Status::NotFound("Error reading data");
+    return Status::NotFound("blockcache: error reading data");
   }
 
   assert(blk_key == key);

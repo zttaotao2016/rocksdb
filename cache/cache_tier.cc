@@ -6,17 +6,17 @@ using namespace rocksdb;
 
 std::unique_ptr<TieredCache> TieredCache::New(const size_t mem_size,
                                               const BlockCacheOptions& opt) {
-  std::unique_ptr<TieredCache> tcache;
+  std::unique_ptr<TieredCache> tcache(new TieredCache());
   // create primary tier
   assert(mem_size);
-  auto pcache = std::unique_ptr<PrimaryCacheTier>(new VolatileCache(mem_size));
+  auto pcache = std::shared_ptr<CacheTier>(new VolatileCache(mem_size));
+  tcache->AddTier(pcache);
   // create secondary tier
-  auto scache = std::unique_ptr<SecondaryCacheTier>(new BlockCacheImpl(opt));
-  Status s = scache->Open();
+  auto scache = std::shared_ptr<CacheTier>(new BlockCacheImpl(opt));
+  tcache->AddTier(scache);
+
+  Status s = tcache->Open();
   assert(s.ok());
-  if (s.ok()) {
-    tcache.reset(new TieredCache(std::move(pcache), std::move(scache)));
-  }
   return tcache;
 }
 

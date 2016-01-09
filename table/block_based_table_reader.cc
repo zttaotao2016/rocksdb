@@ -331,6 +331,8 @@ struct BlockBasedTable::Rep {
   unique_ptr<RandomAccessFile> file;
   char cache_key_prefix[kMaxCacheKeyPrefixSize];
   size_t cache_key_prefix_size = 0;
+  char page_cache_key_prefix[kMaxCacheKeyPrefixSize];
+  size_t page_cache_key_prefix_size = 0;
   char compressed_cache_key_prefix[kMaxCacheKeyPrefixSize];
   size_t compressed_cache_key_prefix_size = 0;
   PageCacheOptions page_cache_options;
@@ -391,6 +393,11 @@ void BlockBasedTable::SetupCacheKeyPrefix(Rep* rep) {
                         &rep->cache_key_prefix[0],
                         &rep->cache_key_prefix_size);
   }
+  if (rep->table_options.page_cache != nullptr) {
+    GenerateCachePrefix(/*cache=*/ nullptr, rep->file->file(),
+                        &rep->page_cache_key_prefix[0],
+                        &rep->page_cache_key_prefix_size);
+  }
   if (rep->table_options.block_cache_compressed != nullptr) {
     GenerateCachePrefix(rep->table_options.block_cache_compressed.get(),
                         rep->file.get(), &rep->compressed_cache_key_prefix[0],
@@ -406,7 +413,7 @@ void BlockBasedTable::GenerateCachePrefix(Cache* cc,
 
   // If the prefix wasn't generated or was too long,
   // create one from the cache.
-  if (*size == 0) {
+  if (cc && *size == 0) {
     char* end = EncodeVarint64(buffer, cc->NewId());
     *size = static_cast<size_t>(end - buffer);
   }
@@ -495,7 +502,7 @@ Status BlockBasedTable::Open(const ImmutableCFOptions& ioptions,
   // page cache options
   rep->page_cache_options = PageCacheOptions(
     rep->table_options.page_cache,
-    std::string(rep->cache_key_prefix, rep->cache_key_prefix_size),
+    std::string(rep->page_cache_key_prefix, rep->page_cache_key_prefix_size),
     rep->ioptions.statistics);
 
   // Read meta index
