@@ -6,7 +6,6 @@
 #include <memory>
 
 #include "cache/cache_util.h"
-#include "cache/cache_tier_testhelper.h"
 #include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
 #include "include/rocksdb/env.h"
@@ -25,28 +24,27 @@ DEFINE_string(path, "/tmp/microbench/blkcache", "Path for cachefile");
 DEFINE_uint64(cache_size, UINT64_MAX, "Cache size");
 DEFINE_int32(iosize, 4*1024, "IO size");
 DEFINE_bool(enable_pipelined_writes, false, "Enable async writes");
-DEFINE_string(cache_type, "block_cache", "Cache type. (blockcache, volatile)");
+DEFINE_string(cache_type, "block_cache",
+              "Cache type. (block_cache, volatile, tiered)");
 DEFINE_bool(benchmark, false, "Benchmark mode");
 DEFINE_int32(volatile_cache_pct, 10, "Percentage of cache in memory tier.");
 
-std::unique_ptr<PrimaryCacheTier> NewVolatileCache() {
+std::unique_ptr<CacheTier> NewVolatileCache() {
   assert(FLAGS_cache_size != UINT64_MAX);
-  std::unique_ptr<PrimaryCacheTier> pcache(new VolatileCache(FLAGS_cache_size));
+  std::unique_ptr<CacheTier> pcache(new VolatileCache(FLAGS_cache_size));
   return pcache;
 }
 
-std::unique_ptr<PrimaryCacheTier> NewBlockCache() {
+std::unique_ptr<CacheTier> NewBlockCache() {
   Status status;
   Env* env = Env::Default();
   auto log = shared_ptr<Logger>(new ConsoleLogger());
   BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log);
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
-  std::unique_ptr<SecondaryCacheTier> scache(new BlockCacheImpl(opt));
-  status = scache->Open();
-  assert(status.ok());
-  std::unique_ptr<PrimaryCacheTier> pcache(
-    new SecondaryCacheTierCloak(std::move(scache)));
-  return pcache;
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  std::unique_ptr<CacheTier> cache(new BlockCacheImpl(opt));
+  status = cache->Open();
+  return cache;
 }
 
 std::unique_ptr<TieredCache> NewTieredCache() {
@@ -54,24 +52,28 @@ std::unique_ptr<TieredCache> NewTieredCache() {
   auto log = shared_ptr<Logger>(new ConsoleLogger());
   auto pct = FLAGS_volatile_cache_pct / (double) 100;
   BlockCacheOptions opt(env, FLAGS_path, (1 - pct) * FLAGS_cache_size, log);
+  opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
   return std::move(TieredCache::New(FLAGS_cache_size * pct, opt));
 }
 
 //
 // Benchmark driver
 //
-class PrimaryCacheTierBenchmark {
+class CacheTierBenchmark {
  public:
-  PrimaryCacheTierBenchmark(std::shared_ptr<PrimaryCacheTier>&& cache)
+  CacheTierBenchmark(std::shared_ptr<CacheTier>&& cache)
     : cache_(cache) {
     Prepop();
+    std::cout << "Pre-population completed" << std::endl;
+    stats_.Clear();
 
     // Start IO threads
     std::list<std::thread> threads;
     Spawn(FLAGS_nthread_write, threads,
-          std::bind(&PrimaryCacheTierBenchmark::Write, this));
+          std::bind(&CacheTierBenchmark::Write, this));
     Spawn(FLAGS_nthread_read,  threads,
-          std::bind(&PrimaryCacheTierBenchmark::Read, this));
+          std::bind(&CacheTierBenchmark::Read, this));
 
     // Wait till FLAGS_nsec and then signal to quit
     Timer t;
@@ -79,20 +81,18 @@ class PrimaryCacheTierBenchmark {
       quit_ = t.ElapsedSec() > size_t(FLAGS_nsec);
       sleep(1);
     }
-
     const size_t sec = t.ElapsedSec();
 
     // Wait for threads to exit
     Join(threads);
-
     // Print stats
     PrintStats(sec);
-
     // Close the cache
     cache_->Flush_TEST();
     cache_->Close();
   }
 
+ private:
   void PrintStats(const size_t sec) {
     std::cout << "Test stats" << std::endl
               << "* Elapsed: " << sec << " s" << std::endl
@@ -109,6 +109,9 @@ class PrimaryCacheTierBenchmark {
               << cache_->PrintStats() << std::endl;
   }
 
+  //
+  // Insert implementation
+  //
   void Prepop()
   {
     for (uint64_t i = 0; i < 1024 * 1024; ++i) {
@@ -117,19 +120,12 @@ class PrimaryCacheTierBenchmark {
       read_key_limit_++;
     }
 
+    // Wait until data is flushed
     cache_->Flush_TEST();
-
     // warmup the cache
     for (uint64_t i = 0; i < 1024 * 1024; ReadKey(i++));
-
-    std::cout << "Pre-population completed" << std::endl;
-
-    stats_.Clear();
   }
 
-  //
-  // Insert implementation
-  //
   void Write() {
     while (!quit_) {
       InsertKey(insert_key_limit_++);
@@ -137,46 +133,30 @@ class PrimaryCacheTierBenchmark {
   }
 
   void InsertKey(const uint64_t key) {
+    // construct key
     uint64_t k[3];
-    k[0] = k[1] = 0;
-    k[2] = key;
-    Slice block_key((char*) &k, sizeof(k));
+    Slice block_key = FillKey(k, key);
 
+    // construct value
     auto block = std::move(NewBlock(key));
 
+    // insert
     Timer timer;
-    Cache::Handle* h = cache_->InsertBlock(
-      block_key, block.get(), &PrimaryCacheTierBenchmark::DeleteBlock);
-    assert(h);
-    assert(cache_->Value(h) == block.get());
+    while (true) {
+      Status status = cache_->Insert(block_key, block.get(), FLAGS_iosize);
+      if (status.ok()) {
+        break;
+      }
+
+      // transient error is possible if we run without pipelining
+      assert(!FLAGS_enable_pipelined_writes);
+    }
+
+    // adjust stats
     stats_.write_latency_.Add(timer.ElapsedMicroSec());
-
-    stats_.bytes_written_.Add(block->size());
-    block.release();
-    cache_->Release(h);
+    stats_.bytes_written_.Add(FLAGS_iosize);
   }
 
-  std::unique_ptr<Block> NewBlock(const uint64_t val) {
-    BlockBuilder bb(/*restarts=*/ 1);
-    std::string key(100, val % 255);
-    std::string value(FLAGS_iosize, val % 255);
-    bb.Add(Slice(key), Slice(value));
-    Slice block_template = bb.Finish();
-
-    const size_t block_size = block_template.size();
-    unique_ptr<char[]> data(new char[block_size]);
-    memcpy(data.get(), block_template.data(), block_size);
-
-    std::unique_ptr<Block> block(Block::NewBlock(std::move(data), block_size));
-    assert(block);
-    assert(block->size());
-    return std::move(block);
-  }
-
-  static void DeleteBlock(const Slice&, void* data) {
-    delete reinterpret_cast<Block*>(data);
-  }
- 
   //
   // Read implementation
   //
@@ -187,35 +167,40 @@ class PrimaryCacheTierBenchmark {
   }
 
   void ReadKey(const uint64_t val) {
-      uint64_t k[3];
-      k[0] = k[1] = 0;
-      k[2] = val;
+    // construct key
+    uint64_t k[3];
+    Slice key = FillKey(k, val);
 
-      Slice key((char*) &k, sizeof(k));
+    // Lookup in cache
+    Timer timer;
+    std::unique_ptr<char[]> block;
+    uint64_t size;
+    Status status = cache_->Lookup(key, &block, &size);
+    if (!status.ok()) {
+      std::cout << status.ToString() << std::endl;
+    }
+    assert(status.ok());
+    assert(size == (uint64_t) FLAGS_iosize);
 
-      Timer timer;
-      Cache::Handle* h = cache_->Lookup(key);
-      if (!h) {
-        return;
-      }
-      stats_.read_latency_.Add(timer.ElapsedMicroSec());
+    // adjust stats
+    stats_.read_latency_.Add(timer.ElapsedMicroSec());
+    stats_.bytes_read_.Add(FLAGS_iosize);
 
-      Block* block = reinterpret_cast<Block*>(cache_->Value(h));
-      assert(block);
-
-      if (!FLAGS_benchmark) {
-        // verify data
-        auto expected_block = std::move(NewBlock(val));
-        assert(block->size() == expected_block->size());
-        assert(memcmp(block->data(), expected_block->data(), block->size())
-                == 0);
-      }
-
-      stats_.bytes_read_.Add(block->size());
-      cache_->Release(h);
+    // verify content
+    if (!FLAGS_benchmark) {
+      auto expected_block = std::move(NewBlock(val));
+      assert(memcmp(block.get(), expected_block.get(), FLAGS_iosize) == 0);
+    }
   }
 
- private:
+  // create data for a key by filling with a certain pattern
+  std::unique_ptr<char[]> NewBlock(const uint64_t val) {
+    unique_ptr<char[]> data(new char[FLAGS_iosize]);
+    memset(data.get(), val % 255, FLAGS_iosize);
+    return std::move(data);
+  }
+
+  // spawn threads
   void Spawn(const size_t n, std::list<std::thread>& threads,
              const std::function<void()>& fn) {
     for (size_t i = 0; i < n; ++i) {
@@ -224,12 +209,21 @@ class PrimaryCacheTierBenchmark {
     }
   }
 
+  // join threads
   void Join(std::list<std::thread>& threads) {
     for (auto& th : threads) {
       th.join();
     }
   }
 
+  // construct key
+  Slice FillKey(uint64_t (&k)[3], const uint64_t val) {
+    k[0] = k[1] = 0;
+    k[2] = val;
+    return Slice((char*) &k, sizeof(k));
+  }
+
+  // benchmark stats
   struct Stats {
     void Clear() {
       bytes_written_.Clear();
@@ -244,11 +238,11 @@ class PrimaryCacheTierBenchmark {
     HistogramImpl write_latency_;
   };
 
-  shared_ptr<PrimaryCacheTier> cache_;
-  atomic<uint64_t> insert_key_limit_{0};
-  atomic<uint64_t> read_key_limit_{0};
-  bool quit_ = false;
-  mutable Stats stats_;
+  shared_ptr<CacheTier> cache_;          // cache implementation
+  atomic<uint64_t> insert_key_limit_{0}; // data inserted upto
+  atomic<uint64_t> read_key_limit_{0};   // data can be read safely upto
+  bool quit_ = false;                    // Quit thread ?
+  mutable Stats stats_;                  // Stats
 };
 
 //
@@ -260,8 +254,7 @@ main(int argc, char** argv) {
                           " [OPTIONS]...");
   google::ParseCommandLineFlags(&argc, &argv, false);
 
-  std::unique_ptr<TieredCache> tcache;
-  std::shared_ptr<PrimaryCacheTier> cache;
+  std::shared_ptr<CacheTier> cache;
   if (FLAGS_cache_type == "block_cache") {
     std::cout << "Using block cache implementation" << std::endl;
     cache = std::move(NewBlockCache());
@@ -270,14 +263,13 @@ main(int argc, char** argv) {
     cache = std::move(NewVolatileCache());
   } else if (FLAGS_cache_type == "tiered") {
     std::cout << "Using tiered cache implementation" << std::endl;
-    tcache = std::move(NewTieredCache());
-    cache = tcache->GetCache();
+    cache = std::move(NewTieredCache());
   } else {
     std::cout << "Unknown option for cache" << std::endl;
   }
 
-  std::unique_ptr<PrimaryCacheTierBenchmark> benchmark(
-    new PrimaryCacheTierBenchmark(std::move(cache)));
+  std::unique_ptr<CacheTierBenchmark> benchmark(
+    new CacheTierBenchmark(std::move(cache)));
 
   return 0;
 }

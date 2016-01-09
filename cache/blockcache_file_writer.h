@@ -32,7 +32,7 @@ struct IO {
  */
 class ThreadedWriter : public Writer {
  public:
-  ThreadedWriter(SecondaryCacheTier* const cache, const size_t qdepth = 1)
+  ThreadedWriter(CacheTier* const cache, const size_t qdepth = 1)
       : Writer(cache) {
     for (size_t i = 0; i < qdepth; ++i) {
       std::thread th(&ThreadedWriter::ThreadMain, this);

@@ -118,7 +118,7 @@ struct BlockCacheOptions {
 /**
  * Block cache implementation
  */
-class BlockCacheImpl : public SecondaryCacheTier {
+class BlockCacheImpl : public CacheTier {
  public:
   BlockCacheImpl(const BlockCacheOptions& opt)
     : opt_(opt),
@@ -175,11 +175,11 @@ class BlockCacheImpl : public SecondaryCacheTier {
    * Insert op
    */
   struct InsertOp {
-    explicit InsertOp(const bool exit_loop) : exit_loop_(exit_loop) {}
+    explicit InsertOp(const bool exit_loop)
+      : exit_loop_(exit_loop) {}
     explicit InsertOp(std::string&& key, std::unique_ptr<char[]>&& data,
                       const size_t size)
       : key_(std::move(key)), data_(std::move(data)), size_(size) {}
-
     ~InsertOp() {}
 
     InsertOp() = delete;

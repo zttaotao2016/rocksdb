@@ -3,186 +3,94 @@
 
 using namespace rocksdb;
 
+void VolatileCache::DeleteCacheData(VolatileCache::CacheData* data) {
+  assert(data);
+  delete data;
+}
+
 //
 // VolatileCache implementation
 //
 VolatileCache::~VolatileCache() {
-  index_.Clear(&DeleteCacheObj);
+  index_.Clear(&DeleteCacheData);
 }
 
-Cache::Handle* VolatileCache::Insert(const Slice& key, void* value,
-                                     size_t charge, deleter_t deleter) {
-  while (size_ + charge > max_size_) {
+Status VolatileCache::Insert(const Slice& page_key, const void* data,
+                             const size_t size) {
+  // precondition
+  assert(data);
+  assert(size);
+
+  // clear up space for insertion
+  size_ += size;
+  while (size_ > max_size_) {
     // TODO: Replace this with condition variable
     Evict();
   }
-
-  // pre-condition
-  assert(value);
-  assert(charge);
-  assert(deleter);
-
-  CacheObject* obj = new PtrRef(key, value, charge, deleter);
-  assert(obj);
-
-  // inc ref count
-  assert(!obj->refs_);
-  ++obj->refs_;
-
-  //insert order: LRU, followed by index
-  bool status = index_.Insert(obj);
-  assert(status);
-  if (status) {
-    size_ += charge;
-    return obj;
-  }
-
-  // unable to insert, data already exisits in the cache
-  assert(!status);
-  --obj->refs_;
-  assert(!obj->refs_);
-
-  return obj;
-}
-
-Cache::Handle* VolatileCache::InsertBlock(const Slice& key, Block* block,
-                                         deleter_t deleter) {
-  while (size_ + block->size() > max_size_) {
-    // TODO: Replace this with condition variable
-    Evict();
-  }
-
-  CacheObject* obj = nullptr;
-#ifndef NDEBUG
-  {
-    // Debug check to make sure that the block already in cache is identical to
-    // the one we were asked to insert
-    CacheObject lookup_key(key);
-    if (index_.Find(&lookup_key, &obj)) {
-      // key already exists in the system
-      assert(obj->Key() == key.ToString());
-      assert(obj->Size() == block->size());
-      Block* obj_block = (Block*) obj->Value();
-      assert(memcmp(obj_block->data(), block->data(), obj->Size()) == 0);
-      assert(obj->refs_);
-      --obj->refs_;
-    }
-  }
-#endif
-  // pre-condition
-  assert(block);
-  assert(block->data());
-  assert(block->size());
-  assert(deleter);
-
-  // allocate
-  obj = new BlockData(key, block, deleter);
-  assert(obj);
-
-  // inc ref
-  assert(!obj->refs_);
-  ++obj->refs_;
 
   // insert order: LRU, followed by index
-  bool status = index_.Insert(obj);
+  std::string key = std::move(page_key.ToString());
+  std::string value(reinterpret_cast<const char*>(data), size);
+  std::unique_ptr<CacheData> cache_data(
+    new CacheData(std::move(key), std::move(value)));
+  bool status = index_.Insert(cache_data.get());
   if (status) {
-    size_ += block->size();
-    return obj;
+    cache_data.release();
+    return Status::OK();
   }
 
   // failed to insert to cache, block already in cache
-  // decrement the ref and return the handle
-  assert(!status);
-  --obj->refs_;
-  assert(!obj->refs_);
-
-  return obj;
+  return Status::TryAgain("key already exists in volatile cache");
 }
 
-static void DeleteBlock(const Slice&, void* data) {
-  Block* block = (Block*) data;
-  delete block;
-}
-
-Cache::Handle* VolatileCache::Lookup(const Slice& key) {
-  CacheObject* obj = nullptr;
-  {
-    CacheObject lookup_key(key);
-    bool status = index_.Find(&lookup_key, &obj);
-    if (status) {
-      assert(obj->refs_);
-      stats_.cache_hits_++;
-      return obj;
-    }
+Status VolatileCache::Lookup(const Slice& page_key,
+                             std::unique_ptr<char[]>* result,
+                             size_t* size) {
+  CacheData key(std::move(page_key.ToString()));
+  CacheData* kv;
+  bool status = index_.Find(&key, &kv);
+  if (status) {
+    // set return data
+    result->reset(new char[kv->value.size()]);
+    memcpy(result->get(), kv->value.c_str(), kv->value.size());
+    *size = kv->value.size();
+    // drop the reference on cache data
+    kv->refs_--;
+    return Status::OK();
   }
 
-  assert(!obj);
   if (next_tier_) {
-    // lookup in the secondary cache;
-    std::unique_ptr<char[]> data;
-    size_t size;
-    if (!next_tier_->Lookup(key, &data, &size).ok()) {
-      // data is not there in the secondary tier
-      stats_.cache_misses_++;
-      return nullptr;
-    }
-
-    assert(data);
-    assert(size);
-
-    // Insert the data to the primary cache and return result
-    Block *block = Block::NewBlock(std::move(data), size);
-    assert(block);
-    assert(block->size() == size);
-    stats_.cache_hits_++;
-    return InsertBlock(key, block, &DeleteBlock);
+    return next_tier_->Lookup(page_key, result, size);
   }
 
-  stats_.cache_misses_++;
-  return nullptr;
+  return Status::NotFound("key not found in volatile cache");
 }
 
-void VolatileCache::Erase(const Slice& key) {
+
+bool VolatileCache::Erase(const Slice& key) {
   assert(!"not supported");
-}
-
-void VolatileCache::Release(Cache::Handle* handle) {
-  assert(handle);
-  auto* obj = (CacheObject*) handle;
-  if (!obj->refs_) {
-    // this was a handle that does not have identity in the cache
-    // we need to destruct
-    delete obj;
-  } else {
-    --obj->refs_;
-  }
-}
-
-void* VolatileCache::Value(Cache::Handle* handle) {
-  assert(handle);
-  auto* obj = (CacheObject*) handle;
-  return (void*) obj->Value();
+  return true;
 }
 
 /*
  * private member functions
  */
 bool VolatileCache::Evict() {
-  CacheObject* obj = index_.Evict();
-  if (!obj) {
+  CacheData* edata = index_.Evict();
+  if (!edata) {
+    // not able to evict any object
     return false;
   }
 
-  if (next_tier_ && obj->Serializable()) {
-    Block* block = (Block*) obj->Value();
-    assert(block);
-    next_tier_->Insert(obj->Key(), (void*) block->data(),
-                       static_cast<uint32_t>(block->size()));
+  // push the evicted object to the next level
+  if (next_tier_) {
+    next_tier_->Insert(Slice(edata->key), edata->value.c_str(),
+                       edata->value.size());
   }
 
-  assert(size_ >= obj->Size());
-  size_ -= obj->Size();
-  delete obj;
+  // adjust size and destroy data
+  size_ -= edata->value.size();
+  delete edata;
 
   return true;
 }

@@ -36,7 +36,7 @@ struct BlockInfo;
 class Writer {
  public:
 
-  Writer(SecondaryCacheTier* const cache)
+  Writer(CacheTier* const cache)
     : cache_(cache) {
   }
   virtual ~Writer() {}
@@ -44,7 +44,7 @@ class Writer {
   virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) = 0;
   virtual void Stop() = 0;
 
-  SecondaryCacheTier* const cache_;
+  CacheTier* const cache_;
 };
 
 /**

@@ -16,7 +16,6 @@
 #include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
 #include "cache/cache_util.h"
-#include "cache/cache_tier_testhelper.h"
 #include "util/testharness.h"
 #include "util/arena.h"
 #include "db/db_test_util.h"
@@ -27,7 +26,7 @@ using namespace std;
 namespace rocksdb {
 
 // create block cache
-std::unique_ptr<SecondaryCacheTier> NewBlockCache(
+std::unique_ptr<CacheTier> NewBlockCache(
   Env* const env, const std::string& path,
   const uint64_t max_size = UINT64_MAX) {
   const uint32_t max_file_size = 12 * 1024 * 1024;
@@ -35,7 +34,7 @@ std::unique_ptr<SecondaryCacheTier> NewBlockCache(
   BlockCacheOptions opt(env, path, max_size, log);
   opt.cache_file_size = max_file_size;
   opt.max_write_pipeline_backlog_size = UINT64_MAX;
-  std::unique_ptr<SecondaryCacheTier> scache(new BlockCacheImpl(opt));
+  std::unique_ptr<CacheTier> scache(new BlockCacheImpl(opt));
   Status s = scache->Open();
   assert(s.ok());
   return std::move(scache);
@@ -44,20 +43,19 @@ std::unique_ptr<SecondaryCacheTier> NewBlockCache(
 // create a new cache tier
 std::unique_ptr<TieredCache> NewTieredCache(
   Env* const env, const std::string& path,
-  const uint64_t max_scache_size = UINT64_MAX) {
-  // create primary cache
-  std::unique_ptr<PrimaryCacheTier> pcache(new VolatileCache(10 * 4096));
-  // create secondary cache
-  auto scache = std::move(NewBlockCache(env, path, max_scache_size));
+  const uint64_t max_volatile_cache_size,
+  const uint64_t max_block_cache_size = UINT64_MAX) {
+  std::shared_ptr<Logger> log(new ConsoleLogger());
+  auto opt = BlockCacheOptions(env, path, max_block_cache_size, log);
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
   // create tier out of the two caches
-  std::unique_ptr<TieredCache> tcache(
-    new TieredCache(std::move(pcache), std::move(scache)));
-  return std::move(tcache);
+  auto cache = TieredCache::New(max_volatile_cache_size, opt);
+  return std::move(cache);
 }
 
-/**
- * Unit tests for testing block cache
- */
+//
+// Unit tests for testing block cache
+//
 class BlockCacheImplTest : public testing::Test {
  public:
   explicit BlockCacheImplTest()
@@ -66,28 +64,21 @@ class BlockCacheImplTest : public testing::Test {
   }
 
   virtual ~BlockCacheImplTest() {
-    if (scache_ ) {
-      Status s = scache_->Close();
-      assert(s.ok());
-    }
-
-    if (pcache_) {
-      Status s = pcache_->Close();
+    if (cache_ ) {
+      Status s = cache_->Close();
       assert(s.ok());
     }
   }
 
  protected:
+  // Flush cache
   void Flush() {
-    if (pcache_) {
-      pcache_->Flush_TEST();
-    }
-
-    if (scache_) {
-      scache_->Flush_TEST();
+    if (cache_) {
+      cache_->Flush_TEST();
     }
   }
 
+  // create threaded workload
   template<class T>
   std::list<std::thread> SpawnThreads(const size_t n, const T& fn) {
     std::list<std::thread> threads;
@@ -98,6 +89,7 @@ class BlockCacheImplTest : public testing::Test {
     return std::move(threads);
   }
 
+  // Wait for threads to join
   void Join(std::list<std::thread>&& threads) {
     for (auto& th : threads) {
       th.join();
@@ -105,6 +97,7 @@ class BlockCacheImplTest : public testing::Test {
     threads.clear();
   }
 
+  // Run insert workload in threads
   void Insert(const size_t nthreads, const size_t max_keys) {
     key_ = 0;
     max_keys_ = max_keys;
@@ -117,33 +110,13 @@ class BlockCacheImplTest : public testing::Test {
     Flush();
   }
 
+  // Run verification on the cache
   void Verify(const size_t nthreads = 1, const bool eviction_enabled = false) {
+    stats_verify_hits_ = 0;
+    stats_verify_missed_ = 0;
     key_ = 0;
     // spawn threads
     auto fn = std::bind(&BlockCacheImplTest::VerifyImpl, this,
-                        eviction_enabled);
-    auto threads = std::move(SpawnThreads(nthreads, fn));
-    // join with threads
-    Join(std::move(threads));
-  }
-
-  void InsertBlocks(const size_t nthreads, const size_t max_keys) {
-    key_ = 0;
-    max_keys_ = max_keys;
-    // spawn threads
-    auto fn = std::bind(&BlockCacheImplTest::InsertBlocksImpl, this);
-    auto threads = std::move(SpawnThreads(nthreads, fn));
-    // join with threads
-    Join(std::move(threads));
-    // Flush
-    Flush();
-  }
-
-  void VerifyBlocks(const size_t nthreads = 1,
-                    const bool eviction_enabled = false) {
-    key_ = 0;
-    // spawn threads
-    auto fn = std::bind(&BlockCacheImplTest::VerifyBlocksImpl, this,
                         eviction_enabled);
     auto threads = std::move(SpawnThreads(nthreads, fn));
     // join with threads
@@ -173,12 +146,13 @@ class BlockCacheImplTest : public testing::Test {
     return std::string(ret, pad_size);
   }
 
+  // Insert workload implementation
   void InsertImpl() {
     const string prefix = "key_prefix_";
 
     while (true) {
       size_t i = key_++;
-      if (i > max_keys_) {
+      if (i >= max_keys_) {
         break;
       }
 
@@ -186,18 +160,18 @@ class BlockCacheImplTest : public testing::Test {
       memset(data, '0' + (i % 10), sizeof(data));
       auto k = prefix + PaddedNumber(i, /*count=*/ 8);
       Slice key(k);
-      while(!scache_->Insert(key, data, sizeof(data)).ok()) {
+      while(!cache_->Insert(key, data, sizeof(data)).ok()) {
         sleep(1);
       }
     }
   }
 
+  // Verification implementation
   void VerifyImpl(const bool eviction_enabled = false) {
-    key_ = 0;
     const string prefix = "key_prefix_";
     while (true) {
       size_t i = key_++;
-      if (i > max_keys_) {
+      if (i >= max_keys_) {
         break;
       }
 
@@ -209,213 +183,119 @@ class BlockCacheImplTest : public testing::Test {
       size_t block_size;
 
       if (eviction_enabled) {
-        if (!scache_->Lookup(key, &block, &block_size).ok()) {
+        if (!cache_->Lookup(key, &block, &block_size).ok()) {
           // assume that the key is evicted
+          stats_verify_missed_++;
           continue;
         }
       }
 
-      ASSERT_OK(scache_->Lookup(key, &block, &block_size));
+      ASSERT_OK(cache_->Lookup(key, &block, &block_size));
       ASSERT_TRUE(block_size == sizeof(edata));
       ASSERT_TRUE(memcmp(edata, block.get(), sizeof(edata)) == 0);
+      stats_verify_hits_++;
     }
   }
 
-  static void DeleteBlock(const Slice& key, void* data) {
-    assert(data);
-    auto* block = (Block*) data;
-    delete block;
+  // template for insert test
+  void RunInsertTest(const size_t nthreads, const size_t max_keys) {
+    Insert(nthreads, max_keys);
+    Verify(nthreads);
+    ASSERT_EQ(stats_verify_hits_, max_keys);
+    ASSERT_EQ(stats_verify_missed_, 0);
+
+    cache_->Close();
+    cache_.reset();
   }
 
-  void InsertBlocksImpl() {
-    const string prefix = "key_prefix_";
-    while (true) {
-      size_t i = key_++;
-      if (i > max_keys_) {
-        break;
-      }
+  // template for insert with eviction test
+  void RunInsertTestWithEviction(const size_t nthreads, const size_t max_keys) {
+    Insert(nthreads, max_keys);
+    Verify(nthreads, /*eviction_enabled=*/ true);
+    ASSERT_EQ(stats_verify_hits_ + stats_verify_missed_, max_keys);
+    ASSERT_GT(stats_verify_hits_, 0);
+    ASSERT_GT(stats_verify_missed_, 0);
 
-      BlockBuilder bb(/*restarts=*/ 1);
-      std::string key(1024, i % 255);
-      std::string val(4096, i % 255);
-      bb.Add(Slice(key), Slice(val));
-      Slice block_template = bb.Finish();
-
-      const size_t block_size = block_template.size();
-      unique_ptr<char[]> data(new char[block_size]);
-      memcpy(data.get(), block_template.data(), block_size);
-
-      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
-      Slice block_key(k);
-
-      Block* block = Block::NewBlock(std::move(data), block_size);
-      assert(block);
-      assert(block->size());
-
-      Cache::Handle* h = nullptr;
-      while(!(h = pcache_->InsertBlock(block_key, block, &DeleteBlock))) {
-        sleep(1);
-      }
-      assert(pcache_->Value(h) == block);
-      pcache_->Release(h);
-    }
-  }
-
-  void VerifyBlocksImpl(const bool relaxed = false) {
-    key_ = 0;
-    const string prefix = "key_prefix_";
-    while (true) {
-      size_t i = key_++;
-      if (i > max_keys_) {
-        break;
-      }
-
-      BlockBuilder bb(/*restarts=*/ 1);
-      std::string key(1024, i % 255);
-      std::string val(4096, i % 255);
-      bb.Add(Slice(key), Slice(val));
-      Slice block_template = bb.Finish();
-
-      auto k = prefix + PaddedNumber(i, /*count=*/ 8);
-      Slice block_key(k);
-      Cache::Handle* h = pcache_->Lookup(block_key);
-      if (!h && relaxed) {
-        continue;
-      }
-      ASSERT_TRUE(h);
-      ASSERT_TRUE(pcache_->Value(h));
-      Block* block = (Block*) pcache_->Value(h);
-      ASSERT_EQ(block->size(), block_template.size());
-      ASSERT_TRUE(memcmp(block->data(), block_template.data(),
-                         block->size()) == 0);
-      pcache_->Release(h);
-    }
+    cache_->Close();
+    cache_.reset();
   }
 
   Env* env_;
   const std::string path_;
   shared_ptr<Logger> log_;
-  std::shared_ptr<SecondaryCacheTier> scache_;
-  std::shared_ptr<PrimaryCacheTier> pcache_;
+  std::shared_ptr<CacheTier> cache_;
   atomic<size_t> key_{0}; 
   size_t max_keys_ = 0;
+  std::atomic<size_t> stats_verify_hits_{0};
+  std::atomic<size_t> stats_verify_missed_{0};
 };
 
-TEST_F(BlockCacheImplTest, Insert) {
-  scache_ = std::move(NewBlockCache(env_, path_));
-  const size_t max_keys = 10 * 1024;
-  Insert(/*nthreads=*/ 1, max_keys);
-  Verify();
-  Verify(/*nthreads=*/ 5);
+// Volatile cache tests
+TEST_F(BlockCacheImplTest, VolatileCacheInsert) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {10 * 1024, 1 * 1024 * 1024}) {
+      cache_ = std::make_shared<VolatileCache>();
+      RunInsertTest(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, BlockInsert) {
-  auto scache = std::move(NewBlockCache(env_, path_));
-  pcache_ = std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
-  const size_t max_keys = 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 1, max_keys);
-  VerifyBlocks();
+TEST_F(BlockCacheImplTest, VolatileCacheInsertWithEviction) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {1 * 1024 * 1024}) {
+      cache_ = std::make_shared<VolatileCache>(/*size=*/ 1 * 1024 * 1024);
+      RunInsertTestWithEviction(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert) {
-  pcache_ = std::make_shared<VolatileCache>();
-  const size_t max_keys = 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 1, max_keys);
-  VerifyBlocks();
+// Block cache tests
+TEST_F(BlockCacheImplTest, BlockCacheInsert) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {10 * 1024, 1 * 1024 * 1024}) {
+      cache_ = std::move(NewBlockCache(env_, path_));
+      RunInsertTest(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, TieredCacheBlockInsert) {
-  auto tcache = std::move(NewTieredCache(env_, path_));
-  pcache_ = tcache->GetCache();
-  const size_t max_keys = 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 1, max_keys);
-  VerifyBlocks();
+TEST_F(BlockCacheImplTest, BlockCacheInsertWithEviction) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {1 * 1024 * 1024}) {
+      cache_ = std::move(NewBlockCache(env_, path_,
+                                       /*max_size=*/ 200 * 1024 * 1024));
+      RunInsertTestWithEviction(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, InsertWithEviction) {
-  scache_ = std::move(NewBlockCache(env_, path_,
-                                    /*max_size=*/ 200 * 1024 * 1024));
-  const size_t max_keys = 100 * 1024;
-  Insert(/*nthreads=*/ 1, max_keys);
-  Verify(/*n=*/ 1, /*eviction_enabled=*/ true);
+// Tiered cache tests
+TEST_F(BlockCacheImplTest, TieredCacheInsert) {
+  // TODO: Add for (auto pipeline : {true, false}) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {10 * 1024, 1 * 1024 * 1024}) {
+      cache_ = std::move(NewTieredCache(env_, path_,
+                                        /*memory_size=*/ 1 * 1024 * 1024));
+      RunInsertTest(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, VolatileBlockInsertWithEviction) {
-  pcache_ = std::make_shared<VolatileCache>(1 * 1024 * 1024);
-  const size_t max_keys = 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 1, max_keys);
-  VerifyBlocks(/*n=*/ 1, /*relaxed=*/ true);
+TEST_F(BlockCacheImplTest, TieredCacheInsertWithEviction) {
+  // TODO: Add for (auto pipeline : {true, false}) {
+  for (auto nthreads : {1, 5}) {
+    for (auto max_keys : {1 * 1024 * 1024}) {
+      cache_ = std::move(
+        NewTieredCache(env_, path_,/*memory_size=*/ 1 * 1024 * 1024,
+                       /*block_cache_size*/ 200 * 1024 * 1024));
+      RunInsertTestWithEviction(nthreads, max_keys);
+    }
+  }
 }
 
-TEST_F(BlockCacheImplTest, MultiThreadedInsert) {
-  scache_ = std::move(NewBlockCache(env_, path_));
-  const size_t max_keys = 5 * 10 * 1024;
-  Insert(/*nthreads=*/ 5, max_keys);
-  Verify();
-  Verify(/*nthreads=*/ 5);
-}
-
-TEST_F(BlockCacheImplTest, MultithreadedBlockInsert) {
-  auto scache = std::move(NewBlockCache(env_, path_));
-  pcache_ = std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
-
-  const size_t max_keys = 5 * 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 5, max_keys);
-  VerifyBlocks();
-  VerifyBlocks(/*nthread=*/ 5);
-}
-
-TEST_F(BlockCacheImplTest, MultithreadedVolatileCacheBlockInsert) {
-  pcache_ = std::make_shared<VolatileCache>();
-  const size_t max_keys = 5 * 10 * 1024;
-  InsertBlocks(/*nthreads=*/ 5, max_keys);
-  VerifyBlocks();
-  VerifyBlocks(/*nthread=*/ 5);
-}
-
-TEST_F(BlockCacheImplTest, Insert1M) {
-  scache_ = std::move(NewBlockCache(env_, path_));
-  const size_t max_keys = 1024 * 1024;
-  Insert(/*nthreads=*/ 10, max_keys);
-  Verify();
-  Verify(/*nthreads=*/ 10);
-}
-
-TEST_F(BlockCacheImplTest, BlockInsert1M) {
-  auto scache = std::move(NewBlockCache(env_, path_));
-  pcache_ = std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
-
-  const size_t max_keys = 1 * 1024 * 1024;
-  InsertBlocks(/*nthreads=*/ 10, max_keys);
-  VerifyBlocks();
-  VerifyBlocks(/*nthread=*/ 10);
-}
-
-TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1M) {
-  pcache_ = std::make_shared<VolatileCache>();
-  const size_t max_keys = 1 * 1024 * 1024;
-  InsertBlocks(/*nthreads=*/ 10, max_keys);
-  VerifyBlocks();
-  VerifyBlocks(/*nthread=*/ 10);
-}
-
-TEST_F(BlockCacheImplTest, Insert1MWithEviction) {
-  scache_ = std::move(NewBlockCache(env_, path_,
-                                    /*max_size=*/ 1024 * 1024 * 1024));
-  const size_t max_keys = 1024 * 1024;
-  Insert(/*nthreads=*/ 10, max_keys);
-  Verify(/*n=*/ 1, /*eviciton_enabled=*/ true);
-  Verify(/*n=*/ 10, /*eviciton_enabled=*/ true);
-}
-
-TEST_F(BlockCacheImplTest, VolatileCacheBlockInsert1MWithEviction) {
-  pcache_ = std::make_shared<VolatileCache>(/*size=*/ 16 * 1024);
-  const size_t max_keys = 1 * 1024 * 1024;
-  InsertBlocks(/*nthreads=*/ 10, max_keys);
-  VerifyBlocks(/*n=*/ 1, /*eviction_enabled=*/ true);
-  VerifyBlocks(/*n=*/ 10, /*eviction_enabled=*/ true);
-}
-
+//
+// RocksDB tests
+//
 static long TestGetTickerCount(const Options& options, Tickers ticker_type) {
   return options.statistics->getTickerCount(ticker_type);
 }
@@ -424,79 +304,114 @@ class BlkCacheDBTest : public DBTestBase {
  public:
   BlkCacheDBTest() : DBTestBase("/cache_test") {}
 
-  std::shared_ptr<PrimaryCacheTier> MakeSecondaryCacheTierCloak() {
-    std::unique_ptr<SecondaryCacheTier> scache(
-      std::move(NewBlockCache(env_,  test::TmpDir(env_) + "/block_cache")));
-   return std::make_shared<SecondaryCacheTierCloak>(std::move(scache));
+  std::shared_ptr<CacheTier> MakeVolatileCache() {
+    return std::make_shared<VolatileCache>();
   }
 
-  std::shared_ptr<SecondaryCacheTier> MakePageCache() {
-    return std::unique_ptr<SecondaryCacheTier>(
-      std::move(NewBlockCache(env_,  test::TmpDir(env_) + "/page_cache")));
+  std::shared_ptr<CacheTier> MakeBlockCache() {
+    return NewBlockCache(env_, dbname_);
   }
 
-  std::shared_ptr<PrimaryCacheTier> MakeVolatileCache() {
-    return std::shared_ptr<PrimaryCacheTier>(new VolatileCache());
+  std::shared_ptr<CacheTier> MakeTieredCache() {
+    const auto memory_size = 1 * 1024 * 1024;
+    return NewTieredCache(env_, dbname_, memory_size);
   }
 
-  std::shared_ptr<PrimaryCacheTier> MakeTieredCache() {
-    tcache_ = std::move(NewTieredCache(env_, dbname_));
-    return tcache_->GetCache();
+  // insert data to table
+  void Insert(const Options& options,
+              const BlockBasedTableOptions& table_options,
+              const int num_iter, std::vector<std::string>& values) {
+    CreateAndReopenWithCF({"pikachu"}, options);
+    // default column family doesn't have block cache
+    Options no_block_cache_opts;
+    no_block_cache_opts.statistics = options.statistics;
+    no_block_cache_opts = CurrentOptions(no_block_cache_opts);
+    BlockBasedTableOptions table_options_no_bc;
+    table_options_no_bc.no_block_cache = true;
+    no_block_cache_opts.table_factory.reset(
+    NewBlockBasedTableFactory(table_options_no_bc));
+    ReopenWithColumnFamilies({"default", "pikachu"},
+    std::vector<Options>({no_block_cache_opts, options}));
+
+    Random rnd(301);
+
+    // Write 8MB (80 values, each 100K)
+    ASSERT_EQ(NumTableFilesAtLevel(0, 1), 0);
+    std::string str;
+    for (int i = 0; i < num_iter; i++) {
+      if (i % 4 == 0) { // high compression ratio
+        str = RandomString(&rnd, 1000);
+      }
+      values.push_back(str);
+      ASSERT_OK(Put(1, Key(i), values[i]));
+    }
+
+    // flush all data from memtable so that reads are from block cache
+    ASSERT_OK(Flush(1));
   }
 
+  // verify data
+  void Verify(const int num_iter, const std::vector<std::string>& values) {
+    for (int j = 0; j < 2; ++j) {
+      for (int i = 0; i < num_iter; i++) {
+        ASSERT_EQ(Get(1, Key(i)), values[i]);
+      }
+    }
+  }
+
+  // test template
   void RunTest(
-    const std::function<std::shared_ptr<PrimaryCacheTier>()>& new_cache) {
+    const std::function<std::shared_ptr<CacheTier>()>& new_cache) {
     if (!Snappy_Supported()) {
       return;
     }
+
+    // number of insertion interations
     int num_iter = 100 * 1024;
 
-    // Run this test three iterations.
-    // Iteration 1: only a uncompressed block cache
-    // Iteration 2: only a compressed block cache
-    // Iteration 3: both block cache and compressed cache
-    // Iteration 4: both block cache and compressed cache, but DB is not
-    // compressed
     for (int iter = 0; iter < 5; iter++) {
       Options options;
-      options.write_buffer_size = 64*1024;        // small write buffer
+      options.write_buffer_size = 64*1024; // small write buffer
       options.statistics = rocksdb::CreateDBStatistics();
       options = CurrentOptions(options);
 
-      auto block_cache = new_cache();
-      auto page_cache = MakePageCache();
-
+      // setup page cache
       BlockBasedTableOptions table_options;
+      auto page_cache = new_cache();
+      assert(page_cache);
       table_options.page_cache = page_cache;
+
       switch (iter) {
         case 0:
-          // only uncompressed block cache
-          table_options.block_cache = block_cache;
+          // page cache, block cache, no-compressed cache
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
           table_options.block_cache_compressed = nullptr;
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           break;
         case 1:
-          // both compressed and uncompressed block cache
-          table_options.block_cache = block_cache;
-          table_options.block_cache_compressed = NewLRUCache(8*1024);
+          // page cache, block cache, compressed cache
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           break;
         case 2:
+          // page cache, block cache, compressed cache + KNoCompression
           // both block cache and compressed cache, but DB is not compressed
           // also, make block cache sizes bigger, to trigger block cache hits
-          table_options.block_cache = block_cache;
-          table_options.block_cache_compressed = NewLRUCache(8 * 1024 * 1024);
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           options.compression = kNoCompression;
           break;
         case 3:
-          // no block cache or compressed cache
+          // page cache, no block cache, no compressed cache
           table_options.block_cache = nullptr;
           table_options.block_cache_compressed = nullptr;
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           break;
         case 4:
-          // no block cache or compressed cache
+          // page cache, no block cache, no compressed cache
+          // Page cache caches compressed blocks
           table_options.block_cache = nullptr;
           table_options.block_cache_compressed = nullptr;
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
@@ -505,76 +420,55 @@ class BlkCacheDBTest : public DBTestBase {
         default:
           ASSERT_TRUE(false);
       }
-      CreateAndReopenWithCF({"pikachu"}, options);
-      // default column family doesn't have block cache
-      Options no_block_cache_opts;
-      no_block_cache_opts.statistics = options.statistics;
-      no_block_cache_opts = CurrentOptions(no_block_cache_opts);
-      BlockBasedTableOptions table_options_no_bc;
-      table_options_no_bc.no_block_cache = true;
-      no_block_cache_opts.table_factory.reset(
-          NewBlockBasedTableFactory(table_options_no_bc));
-      ReopenWithColumnFamilies({"default", "pikachu"},
-          std::vector<Options>({no_block_cache_opts, options}));
 
-      Random rnd(301);
-
-      // Write 8MB (80 values, each 100K)
-      ASSERT_EQ(NumTableFilesAtLevel(0, 1), 0);
       std::vector<std::string> values;
-      std::string str;
-      for (int i = 0; i < num_iter; i++) {
-        if (i % 4 == 0) {        // high compression ratio
-          str = RandomString(&rnd, 1000);
-        }
-        values.push_back(str);
-        ASSERT_OK(Put(1, Key(i), values[i]));
-      }
-
-      // flush all data from memtable so that reads are from block cache
-      ASSERT_OK(Flush(1));
+      // insert data
+      Insert(options, table_options, num_iter, values);
       // flush all data in cache to device
-      block_cache->Flush_TEST();
       page_cache->Flush_TEST();
+      // verify data
+      Verify(num_iter, values);
 
-      for (int j = 0; j < 2; ++j) {
-        for (int i = 0; i < num_iter; i++) {
-          ASSERT_EQ(Get(1, Key(i)), values[i]);
-        }
-      }
+      auto block_miss = TestGetTickerCount(options, BLOCK_CACHE_MISS);
+      auto compressed_block_hit = TestGetTickerCount(
+        options, BLOCK_CACHE_COMPRESSED_HIT);
+      auto compressed_block_miss = TestGetTickerCount(
+        options, BLOCK_CACHE_COMPRESSED_MISS);
+      auto page_hit = TestGetTickerCount(options, PAGE_CACHE_HIT);
+      auto page_miss = TestGetTickerCount(options, PAGE_CACHE_MISS);
 
       // check that we triggered the appropriate code paths in the cache
       switch (iter) {
         case 0:
-          // only uncompressed block cache
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          // page cache, block cache, no-compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_EQ(compressed_block_miss, 0);
+          ASSERT_EQ(compressed_block_hit, 0);
           break;
         case 1:
-          // both compressed and uncompressed block cache
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          // page cache, block cache, compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_GT(compressed_block_miss, 0);
           break;
         case 2:
-          // both compressed and uncompressed block cache
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_MISS), 0);
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_HIT), 0);
-          ASSERT_GT(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-          // compressed doesn't have any hits since blocks are not compressed on
-          // storage
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
+          // page cache, block cache, compressed cache + KNoCompression
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_GT(compressed_block_miss, 0);
+          // remember kNoCompression
+          ASSERT_EQ(compressed_block_hit, 0);
           break;
         case 3:
-          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_HIT), 0);
-          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_MISS), 0);
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
-          break;
         case 4:
-          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_HIT), 0);
-          ASSERT_GT(TestGetTickerCount(options, PAGE_CACHE_MISS), 0);
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_HIT), 0);
-          ASSERT_EQ(TestGetTickerCount(options, BLOCK_CACHE_COMPRESSED_MISS), 0);
+          // page cache, no block cache, no compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_EQ(compressed_block_hit, 0);
+          ASSERT_EQ(compressed_block_miss, 0);
           break;
         default:
           ASSERT_TRUE(false);
@@ -583,23 +477,22 @@ class BlkCacheDBTest : public DBTestBase {
       options.create_if_missing = true;
       DestroyAndReopen(options);
 
-      block_cache->Flush_TEST();
-      block_cache->Close();
       page_cache->Close();
     }
   }
-
-  std::unique_ptr<TieredCache> tcache_;
 };
 
-TEST_F(BlkCacheDBTest, BlockCacheTest) {
-  RunTest(std::bind(&BlkCacheDBTest::MakeSecondaryCacheTierCloak, this));
-}
-
+// test table with volatile page cache
 TEST_F(BlkCacheDBTest, VolatileCacheTest) {
   RunTest(std::bind(&BlkCacheDBTest::MakeVolatileCache, this));
 }
 
+// test table with block page cache
+TEST_F(BlkCacheDBTest, BlockCacheTest) {
+  RunTest(std::bind(&BlkCacheDBTest::MakeBlockCache, this));
+}
+
+// test table with tiered page cache
 TEST_F(BlkCacheDBTest, TieredCacheTest) {
   RunTest(std::bind(&BlkCacheDBTest::MakeTieredCache, this));
 }

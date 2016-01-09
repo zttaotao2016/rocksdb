@@ -1503,6 +1503,7 @@ class Duration {
 class Benchmark {
  private:
   std::shared_ptr<Cache> cache_;
+  std::shared_ptr<CacheTier> page_cache_;
   std::shared_ptr<Cache> compressed_cache_;
   std::shared_ptr<const FilterPolicy> filter_policy_;
   const SliceTransform* prefix_extractor_;
@@ -1700,8 +1701,9 @@ class Benchmark {
   }
 
  public:
-  Benchmark(std::shared_ptr<Cache>& cache)
-      : cache_(cache),
+  Benchmark(std::shared_ptr<Cache>& cache,
+            const std::shared_ptr<CacheTier>& page_cache = nullptr)
+      : cache_(cache), page_cache_(page_cache),
         compressed_cache_(FLAGS_compressed_cache_size >= 0
                               ? (FLAGS_cache_numshardbits >= 1
                                      ? NewLRUCache(FLAGS_compressed_cache_size,
@@ -1766,6 +1768,9 @@ class Benchmark {
     if (cache_.get() != nullptr) {
       // this will leak, but we're shutting down so nobody cares
       cache_->DisownData();
+    }
+    if (page_cache_) {
+      page_cache_->Close();
     }
     if (FLAGS_disable_flashcache_for_background_threads && cachedev_fd_ != -1) {
       // Dtor for this env should run before cachedev_fd_ is closed
@@ -2020,7 +2025,11 @@ class Benchmark {
       }
     }
     if (FLAGS_statistics) {
-     fprintf(stdout, "STATISTICS:\n%s\n", dbstats->ToString().c_str());
+      fprintf(stdout, "STATISTICS:\n%s\n", dbstats->ToString().c_str());
+      if (page_cache_) {
+        fprintf(stdout, "PAGE CACHE STATISTICS: %s \n",
+                page_cache_->PrintStats().c_str());
+      }
     }
   }
 
@@ -2450,6 +2459,7 @@ class Benchmark {
       block_based_options.cache_index_and_filter_blocks =
           FLAGS_cache_index_and_filter_blocks;
       block_based_options.block_cache = cache_;
+      block_based_options.page_cache = page_cache_;
       block_based_options.block_cache_compressed = compressed_cache_;
       block_based_options.block_size = FLAGS_block_size;
       block_based_options.block_restart_interval = FLAGS_block_restart_interval;
@@ -4070,8 +4080,8 @@ int main(int argc, char** argv) {
     FLAGS_stats_interval = 1000;
   }
 
-  std::unique_ptr<rocksdb::TieredCache> tcache;
   std::shared_ptr<rocksdb::Cache> cache;
+  std::shared_ptr<rocksdb::CacheTier> page_cache;
   if (FLAGS_cache_size >= 0) {
     if (FLAGS_enable_tiered_block_cache) {
       std::shared_ptr<rocksdb::Logger> log;
@@ -4080,9 +4090,7 @@ int main(int argc, char** argv) {
       assert(s.ok());
       rocksdb::BlockCacheOptions opt(FLAGS_env, FLAGS_block_cache_path,
                                      FLAGS_block_cache_size, log);
-      tcache = std::move(rocksdb::TieredCache::New(FLAGS_cache_size, opt));
-      assert(tcache);
-      cache = tcache->GetCache();
+      page_cache = std::move(rocksdb::TieredCache::New(FLAGS_cache_size, opt));
     } else if (FLAGS_cache_numshardbits >= 1) {
       cache = rocksdb::NewLRUCache(FLAGS_cache_size, FLAGS_cache_numshardbits);
     } else {
@@ -4090,7 +4098,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  rocksdb::Benchmark benchmark(cache);
+  rocksdb::Benchmark benchmark(cache, page_cache);
   benchmark.Run();
   return 0;
 }
