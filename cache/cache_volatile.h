@@ -4,7 +4,8 @@
 #include <sstream>
 
 #include "include/rocksdb/cache.h"
-#include "cache/cache_tier.h"
+#include "include/rocksdb/cache_tier.h"
+
 #include "cache/hash_table_evictable.h"
 #include "cache/hash_table.h"
 

@@ -40,7 +40,7 @@ int main() {
 #include <mutex>
 #include <thread>
 
-#include "cache/cache_tier.h"
+#include "include/rocksdb/cache_tier.h"
 #include "cache/blockcache.h"
 #include "db/db_impl.h"
 #include "db/version_set.h"

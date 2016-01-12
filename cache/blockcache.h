@@ -8,16 +8,16 @@
 #include <thread>
 #include <sstream>
 
+#include "include/rocksdb/comparator.h"
+#include "include/rocksdb/cache_tier.h"
+#include "include/rocksdb/cache.h"
+
 #include "cache/blockcache_file.h"
 #include "cache/blockcache_metadata.h"
 #include "cache/blockcache_file_writer.h"
-#include "cache/cache_tier.h"
 #include "cache/cache_util.h"
-#include "db/skiplist.h"
-#include "include/rocksdb/comparator.h"
-#include "include/rocksdb/env.h"
 #include "port/port_posix.h"
-#include "rocksdb/cache.h"
+#include "db/skiplist.h"
 #include "util/arena.h"
 #include "util/coding.h"
 #include "util/crc32c.h"
@@ -25,95 +25,6 @@
 #include "util/histogram.h"
 
 namespace rocksdb {
-
-/**
- * BlockCache options
- */
-struct BlockCacheOptions {
-  explicit BlockCacheOptions(Env* const _env, const std::string& _path,
-                             const uint64_t _cache_size,
-                             const std::shared_ptr<Logger>& _log,
-                             const uint32_t _write_buffer_size
-                                                  = 1 * 1024 * 1024) {
-    env = _env;
-    path = _path;
-    log = _log;
-    cache_size = _cache_size;
-    cache_file_size = 100ULL * 1024 * 1024;
-    writer_qdepth = 1;
-    write_buffer_size = _write_buffer_size;
-    write_buffer_count = 200;
-    bufferpool_limit = 2ULL * write_buffer_size * write_buffer_count;
-  }
-
-  /**
-   * Env abstraction to use for systmer level operations
-   */
-  Env* env;
-
-  /**
-   * Path for the block cache where blocks are persisted
-   */
-  std::string path;
-
-  /**
-   * Log handle for logging messages
-   */
-  std::shared_ptr<Logger> log;
-
-  /**
-   * Logical cache size
-   */
-  uint64_t cache_size = UINT64_MAX;
-
-  /**
-   * Cache consists of multiples of small files. This is the size of individual
-   * cache file
-   *
-   * default: 1M
-   */
-  uint32_t cache_file_size = 100ULL * 1024 * 1024;
-
-  /**
-   * The writers can issues IO to the devices in parallel. This parameter
-   * controls the qdepth to use for a given block device
-   */
-  uint32_t writer_qdepth = 2;
-
-  /**
-   * Pipeline writes. The write will be delayed and asynchronous. This helps
-   * avoid regression in the eviction code path of the primary tier
-   */
-  bool pipeline_writes_ = true;
-
-  /**
-   * Max pipeline buffer size. This is the maximum backlog we can accumulate
-   * while waiting for writes.
-   *
-   * Default: 1GiB
-   */
-  uint64_t max_write_pipeline_backlog_size = 1ULL * 1024 * 1024 * 1024;
-
-  /**
-   * IO size to block device
-   */
-  uint32_t write_buffer_size = 1 * 1024 * 1024;
-
-  /**
-   * Number of buffers to pool
-   * (should be greater than cache file size)
-   */
-  uint32_t write_buffer_count = 200;
-
-  /**
-   * Buffer poll limit to which it can grow
-   */
-  uint64_t bufferpool_limit = 2ULL * cache_file_size;
-
-  BlockCacheOptions MakeBlockCacheOptions(const std::string& path,
-                                          const uint64_t size,
-                                          const std::shared_ptr<Logger>& lg);
-};
 
 /**
  * Block cache implementation
@@ -135,18 +46,20 @@ class BlockCacheImpl : public CacheTier {
 
   virtual ~BlockCacheImpl() {}
 
-  // Open and initialize cache
-  Status Open() override;
-
-  /*
-   * override from SecondaryCacheTier
-   */
-  Status Insert(const Slice& key, const void* data, const size_t size);
+  //
+  // Override from PageCache
+  //
+  Status Insert(const Slice& key, const void* data, const size_t size) override;
   Status Lookup(const Slice & key, std::unique_ptr<char[]>* data,
-                size_t* size);
+                size_t* size) override;
+
+  //
+  // Override from CacheTier
+  //
+  Status Open() override;
+  Status Close() override;
   bool Erase(const Slice& key) override;
   bool Reserve(const size_t size) override;
-  Status Close() override;
 
   std::string PrintStats() override {
     std::ostringstream os;
@@ -171,9 +84,9 @@ class BlockCacheImpl : public CacheTier {
   }
 
  private:
-  /**
-   * Insert op
-   */
+  //
+  // Insert operation abstraction
+  //
   struct InsertOp {
     explicit InsertOp(const bool exit_loop)
       : exit_loop_(exit_loop) {}
@@ -205,6 +118,9 @@ class BlockCacheImpl : public CacheTier {
   // Get cache directory path
   std::string GetCachePath() const { return opt_.path + "/cache"; }
 
+  //
+  // Statistics
+  //
   struct Stats {
     HistogramImpl bytes_pipelined_;
     HistogramImpl bytes_written_;
