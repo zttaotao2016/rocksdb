@@ -26,9 +26,9 @@
 
 namespace rocksdb {
 
-/**
- * Block cache implementation
- */
+//
+// Block cache implementation
+//
 class BlockCacheImpl : public CacheTier {
  public:
   BlockCacheImpl(const BlockCacheOptions& opt)
@@ -63,17 +63,21 @@ class BlockCacheImpl : public CacheTier {
 
   std::string PrintStats() override {
     std::ostringstream os;
-    os << "Blockcache stats: " << std::endl
-       << "* bytes piplined: " << std::endl
+    os << "pagecache.blockcache.bytes_piplined: "
        << stats_.bytes_pipelined_.ToString() << std::endl
-       << "* bytes written:" << std::endl
+       << "pagecache.blockcache.bytes_written: "
        << stats_.bytes_written_.ToString() << std::endl
-       << "* bytes read:" << std::endl
+       << "pagecache.blockcache.bytes_read: "
        << stats_.bytes_read_.ToString() << std::endl
-       << "* cache_hits:" << std::endl
+       << "pagecache.blockcache.cache_hits: "
        << stats_.cache_hits_ << std::endl
-       << "* cache_misses:" << std::endl
-       << stats_.cache_misses_ << std::endl;
+       << "pagecache.blockcache.cache_misses: "
+       << stats_.cache_misses_ << std::endl
+       << "pagecache.blockcache.cache_hits_pct: "
+       << stats_.CacheHitPct() << std::endl
+       << "pagecache.blockcache.cache_misses_pct: "
+       << stats_.CacheMissPct() << std::endl
+       << CacheTier::PrintStats();
     return os.str();
   }
 
@@ -84,9 +88,7 @@ class BlockCacheImpl : public CacheTier {
   }
 
  private:
-  //
-  // Insert operation abstraction
-  //
+  // Pipelined operation
   struct InsertOp {
     explicit InsertOp(const bool exit_loop)
       : exit_loop_(exit_loop) {}
@@ -118,15 +120,23 @@ class BlockCacheImpl : public CacheTier {
   // Get cache directory path
   std::string GetCachePath() const { return opt_.path + "/cache"; }
 
-  //
   // Statistics
-  //
   struct Stats {
     HistogramImpl bytes_pipelined_;
     HistogramImpl bytes_written_;
     HistogramImpl bytes_read_;
     uint64_t cache_hits_ = 0;
     uint64_t cache_misses_ = 0;
+
+    double CacheHitPct() const {
+      const auto lookups = cache_hits_ + cache_misses_;
+      return lookups ? 100 * cache_hits_ / (double) lookups : 0.0;
+    }
+
+    double CacheMissPct() const {
+      const auto lookups = cache_misses_ + cache_misses_;
+      return lookups ? 100 * cache_hits_ / (double) lookups : 0.0;
+    }
   };
 
   port::RWMutex lock_;                  // Synchronization

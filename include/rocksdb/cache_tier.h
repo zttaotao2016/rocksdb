@@ -9,9 +9,9 @@
 
 namespace rocksdb {
 
-/**
- * BlockCache options
- */
+//
+// BlockCache options
+//
 struct BlockCacheOptions {
   explicit BlockCacheOptions(Env* const _env, const std::string& _path,
                              const uint64_t _cache_size,
@@ -29,32 +29,21 @@ struct BlockCacheOptions {
     bufferpool_limit = 2ULL * write_buffer_size * write_buffer_count;
   }
 
-  /**
-   * Env abstraction to use for systmer level operations
-   */
+  //Env abstraction to use for systmer level operations
   Env* env;
 
-  /**
-   * Path for the block cache where blocks are persisted
-   */
+  // Path for the block cache where blocks are persisted
   std::string path;
 
-  /**
-   * Log handle for logging messages
-   */
+  // Log handle for logging messages
   std::shared_ptr<Logger> log;
 
-  /**
-   * Logical cache size
-   */
+  // Logical cache size
   uint64_t cache_size = UINT64_MAX;
 
-  /**
-   * Cache consists of multiples of small files. This is the size of individual
-   * cache file
-   *
-   * default: 1M
-   */
+  // Cache consists of multiples of small files. This is the size of individual
+  // cache file
+  // default: 1M
   uint32_t cache_file_size = 100ULL * 1024 * 1024;
 
   /**
@@ -164,10 +153,15 @@ class CacheTier : public PageCache {
     return true;
   }
 
-  /**
-   * Print stats as string
-   */
-  virtual std::string PrintStats() { return std::string(); }
+  //
+  // Print stats as string
+  //
+  virtual std::string PrintStats() {
+    if (next_tier_) {
+      return next_tier_->PrintStats();
+    }
+    return std::string();
+  }
 
   // TEST: Flush data
   virtual void Flush_TEST() {
