@@ -30,11 +30,19 @@ class VolatileCache : public CacheTier {
   // Print stats
   std::string PrintStats() override {
     std::ostringstream ss;
-    ss << "Volatile cache stats: " << std::endl
-       << "* cache hits: " << stats_.cache_hits_ << std::endl
-       << "* cache misses: " << stats_.cache_misses_ << std::endl;
-
-    CacheTier::PrintStats();
+    ss << "pagecache.volatilecache.hits: "
+       << stats_.cache_hits_ << std::endl
+       << "pagecache.volatilecache.misses: "
+       << stats_.cache_misses_ << std::endl
+       << "pagecache.volatilecache.inserts: "
+       << stats_.cache_inserts_ << std::endl
+       << "pagecache.volatilecache.evicts: "
+       << stats_.cache_evicts_ << std::endl
+       << "pagecache.volatilecache.hit_pct: "
+       << stats_.CacheHitPct() << std::endl
+       << "pagecache.volatilecache.miss_pct: "
+       << stats_.CacheMissPct() << std::endl
+       << CacheTier::PrintStats();
     return std::move(ss.str());
   }
 
@@ -82,6 +90,18 @@ class VolatileCache : public CacheTier {
   struct Stats {
     uint64_t cache_misses_ = 0;
     uint64_t cache_hits_ = 0;
+    uint64_t cache_inserts_ = 0;
+    uint64_t cache_evicts_ = 0;
+
+    double CacheHitPct() const {
+      auto lookups = cache_hits_ + cache_misses_;
+      return lookups ? 100 * cache_hits_ / (double) lookups : 0.0;
+    }
+
+    double CacheMissPct() const {
+      auto lookups = cache_hits_ + cache_misses_;
+      return lookups ? 100 * cache_misses_ / (double) lookups : 0.0;
+    }
   };
 
   // Evict LRU tail

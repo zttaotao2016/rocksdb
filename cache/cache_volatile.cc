@@ -36,6 +36,7 @@ Status VolatileCache::Insert(const Slice& page_key, const void* data,
   bool status = index_.Insert(cache_data.get());
   if (status) {
     cache_data.release();
+    stats_.cache_inserts_++;
     return Status::OK();
   }
 
@@ -56,8 +57,12 @@ Status VolatileCache::Lookup(const Slice& page_key,
     *size = kv->value.size();
     // drop the reference on cache data
     kv->refs_--;
+    // update stats
+    stats_.cache_hits_++;
     return Status::OK();
   }
+
+  stats_.cache_misses_++;
 
   if (next_tier_) {
     return next_tier_->Lookup(page_key, result, size);
@@ -81,6 +86,8 @@ bool VolatileCache::Evict() {
     // not able to evict any object
     return false;
   }
+
+  stats_.cache_evicts_++;
 
   // push the evicted object to the next level
   if (next_tier_) {
