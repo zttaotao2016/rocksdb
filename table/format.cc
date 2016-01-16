@@ -411,11 +411,11 @@ Status LookupUncompressedPage(const PageCacheOptions& cache_options,
   return Status::OK();
 }
 
-Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
+Status ReadBlockContents(RandomAccessFile* file, const Footer& footer,
                          const ReadOptions& read_options,
                          const BlockHandle& handle,
                          BlockContents* contents, Env* env,
-                         bool decompression_requested,
+                         bool decompression_requested ,
                          const PageCacheOptions& cache_options) {
   Status status;
   Slice slice;

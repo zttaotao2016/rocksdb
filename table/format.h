@@ -200,7 +200,7 @@ extern Status ReadBlockContents(RandomAccessFile* file, const Footer& footer,
                                 const BlockHandle& handle,
                                 BlockContents* contents, Env* env,
                                 bool do_uncompress,
-                                const PageCacheOptions& page_cache_options);
+                                const PageCacheOptions& cache_options);
 
 // The 'data' points to the raw block contents read in from file.
 // This method allocates a new heap buffer and the raw block

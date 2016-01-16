@@ -264,13 +264,11 @@ bool WriteableCacheFile::Create() {
   Debug(log_, "Creating new cache %s (max size is %d B)", Path().c_str(),
         max_size_);
 
-  Status s = env_->FileExists(Path());
-  if (s.ok()) {
-    Warn(log_, "File %s already exists. %s", Path().c_str(),
-         s.ToString().c_str());
+  if (env_->FileExists(Path())) {
+    Warn(log_, "File %s already exists.", Path().c_str());
   }
 
-  s = NewCacheWritableFile(env_, Path(), &file_);
+  Status s = NewCacheWritableFile(env_, Path(), &file_);
   if (!s.ok()) {
     Warn(log_, "Unable to create file %s. %s", Path().c_str(),
          s.ToString().c_str());

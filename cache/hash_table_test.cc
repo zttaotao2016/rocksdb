@@ -12,7 +12,6 @@
 #include "cache/blockcache.h"
 #include "util/testharness.h"
 #include "util/arena.h"
-#include "db/db_test_util.h"
 
 using namespace std;
 

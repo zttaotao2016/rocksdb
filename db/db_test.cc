@@ -59,6 +59,10 @@
 #include "util/thread_status_util.h"
 #include "util/xfunc.h"
 
+#include "cache/blockcache.h"
+#include "cache/cache_volatile.h"
+#include "cache/cache_util.h"
+
 namespace rocksdb {
 
 static std::string RandomString(Random* rnd, int len) {
@@ -12993,6 +12997,232 @@ TEST_F(DBTest, SuggestCompactRangeNoTwoLevel0Compactions) {
 
   TEST_SYNC_POINT("DBTest::SuggestCompactRangeNoTwoLevel0Compactions:2");
 }
+
+// create block cache
+static std::unique_ptr<CacheTier> NewBlockCache(
+  Env* const env, const std::string& path,
+  const uint64_t max_size = UINT64_MAX) {
+  const uint32_t max_file_size = 12 * 1024 * 1024;
+  std::shared_ptr<Logger> log(new ConsoleLogger());
+  BlockCacheOptions opt(env, path, max_size, log);
+  opt.cache_file_size = max_file_size;
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  std::unique_ptr<CacheTier> scache(new BlockCacheImpl(opt));
+  Status s = scache->Open();
+  assert(s.ok());
+  return std::move(scache);
+}
+
+// create a new cache tier
+static std::unique_ptr<TieredCache> NewTieredCache(
+  Env* const env, const std::string& path,
+  const uint64_t max_volatile_cache_size,
+  const uint64_t max_block_cache_size = UINT64_MAX) {
+  std::shared_ptr<Logger> log(new ConsoleLogger());
+  auto opt = BlockCacheOptions(env, path, max_block_cache_size, log);
+  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  // create tier out of the two caches
+  auto cache = TieredCache::New(max_volatile_cache_size, opt);
+  return std::move(cache);
+}
+
+class BlkCacheDBTest : public DBTest {
+ public:
+  BlkCacheDBTest() : DBTest() {}
+
+  std::shared_ptr<CacheTier> MakeVolatileCache() {
+    return std::make_shared<VolatileCache>();
+  }
+
+  std::shared_ptr<CacheTier> MakeBlockCache() {
+    return NewBlockCache(env_, dbname_);
+  }
+
+  std::shared_ptr<CacheTier> MakeTieredCache() {
+    const auto memory_size = 1 * 1024 * 1024;
+    return NewTieredCache(env_, dbname_, memory_size);
+  }
+
+  // insert data to table
+  void Insert(const Options& options,
+              const BlockBasedTableOptions& table_options,
+              const int num_iter, std::vector<std::string>& values) {
+    CreateAndReopenWithCF({"pikachu"}, options);
+    // default column family doesn't have block cache
+    Options no_block_cache_opts;
+    no_block_cache_opts.statistics = options.statistics;
+    no_block_cache_opts = CurrentOptions(no_block_cache_opts);
+    BlockBasedTableOptions table_options_no_bc;
+    table_options_no_bc.no_block_cache = true;
+    no_block_cache_opts.table_factory.reset(
+    NewBlockBasedTableFactory(table_options_no_bc));
+    ReopenWithColumnFamilies({"default", "pikachu"},
+    std::vector<Options>({no_block_cache_opts, options}));
+
+    Random rnd(301);
+
+    // Write 8MB (80 values, each 100K)
+    ASSERT_EQ(NumTableFilesAtLevel(0, 1), 0);
+    std::string str;
+    for (int i = 0; i < num_iter; i++) {
+      if (i % 4 == 0) { // high compression ratio
+        str = RandomString(&rnd, 1000);
+      }
+      values.push_back(str);
+      ASSERT_OK(Put(1, Key(i), values[i]));
+    }
+
+    // flush all data from memtable so that reads are from block cache
+    ASSERT_OK(Flush(1));
+  }
+
+  // verify data
+  void Verify(const int num_iter, const std::vector<std::string>& values) {
+    for (int j = 0; j < 2; ++j) {
+      for (int i = 0; i < num_iter; i++) {
+        ASSERT_EQ(Get(1, Key(i)), values[i]);
+      }
+    }
+  }
+
+  // test template
+  void RunTest(
+    const std::function<std::shared_ptr<CacheTier>()>& new_cache) {
+    if (!Snappy_Supported()) {
+      return;
+    }
+
+    // number of insertion interations
+    int num_iter = 100 * 1024;
+
+    for (int iter = 0; iter < 5; iter++) {
+      Options options;
+      options.write_buffer_size = 64*1024; // small write buffer
+      options.statistics = rocksdb::CreateDBStatistics();
+      options = CurrentOptions(options);
+
+      // setup page cache
+      BlockBasedTableOptions table_options;
+      auto page_cache = new_cache();
+      assert(page_cache);
+      table_options.page_cache = page_cache;
+
+      switch (iter) {
+        case 0:
+          // page cache, block cache, no-compressed cache
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 1:
+          // page cache, block cache, compressed cache
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 2:
+          // page cache, block cache, compressed cache + KNoCompression
+          // both block cache and compressed cache, but DB is not compressed
+          // also, make block cache sizes bigger, to trigger block cache hits
+          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          options.compression = kNoCompression;
+          break;
+        case 3:
+          // page cache, no block cache, no compressed cache
+          table_options.block_cache = nullptr;
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          break;
+        case 4:
+          // page cache, no block cache, no compressed cache
+          // Page cache caches compressed blocks
+          table_options.block_cache = nullptr;
+          table_options.block_cache_compressed = nullptr;
+          options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+          page_cache->type() = PageCache::Type::RAW;
+          break;
+        default:
+          ASSERT_TRUE(false);
+      }
+
+      std::vector<std::string> values;
+      // insert data
+      Insert(options, table_options, num_iter, values);
+      // flush all data in cache to device
+      page_cache->Flush_TEST();
+      // verify data
+      Verify(num_iter, values);
+
+      auto block_miss = TestGetTickerCount(options, BLOCK_CACHE_MISS);
+      auto compressed_block_hit = TestGetTickerCount(
+        options, BLOCK_CACHE_COMPRESSED_HIT);
+      auto compressed_block_miss = TestGetTickerCount(
+        options, BLOCK_CACHE_COMPRESSED_MISS);
+      auto page_hit = TestGetTickerCount(options, PAGE_CACHE_HIT);
+      auto page_miss = TestGetTickerCount(options, PAGE_CACHE_MISS);
+
+      // check that we triggered the appropriate code paths in the cache
+      switch (iter) {
+        case 0:
+          // page cache, block cache, no-compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_EQ(compressed_block_miss, 0);
+          ASSERT_EQ(compressed_block_hit, 0);
+          break;
+        case 1:
+          // page cache, block cache, compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_GT(compressed_block_miss, 0);
+          break;
+        case 2:
+          // page cache, block cache, compressed cache + KNoCompression
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_GT(block_miss, 0);
+          ASSERT_GT(compressed_block_miss, 0);
+          // remember kNoCompression
+          ASSERT_EQ(compressed_block_hit, 0);
+          break;
+        case 3:
+        case 4:
+          // page cache, no block cache, no compressed cache
+          ASSERT_GT(page_miss, 0);
+          ASSERT_GT(page_hit, 0);
+          ASSERT_EQ(compressed_block_hit, 0);
+          ASSERT_EQ(compressed_block_miss, 0);
+          break;
+        default:
+          ASSERT_TRUE(false);
+      }
+
+      options.create_if_missing = true;
+      DestroyAndReopen(options);
+
+      page_cache->Close();
+    }
+  }
+};
+
+// test table with volatile page cache
+TEST_F(BlkCacheDBTest, VolatileCacheTest) {
+  RunTest(std::bind(&BlkCacheDBTest::MakeVolatileCache, this));
+}
+
+// test table with block page cache
+TEST_F(BlkCacheDBTest, BlockCacheTest) {
+  RunTest(std::bind(&BlkCacheDBTest::MakeBlockCache, this));
+}
+
+// test table with tiered page cache
+TEST_F(BlkCacheDBTest, TieredCacheTest) {
+  RunTest(std::bind(&BlkCacheDBTest::MakeTieredCache, this));
+}
+
 
 }  // namespace rocksdb
 

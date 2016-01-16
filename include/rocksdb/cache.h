@@ -64,11 +64,6 @@ class Cache {
   virtual Handle* Insert(const Slice& key, void* value, size_t charge,
                          void (*deleter)(const Slice& key, void* value)) = 0;
 
-  virtual Handle* InsertBlock(const Slice& key, Block* block,
-                              void (*deleter)(const Slice&, void*)) {
-    return Insert(key, (void*) block, block->usable_size(), deleter);
-  }
-
   // If the cache has no mapping for "key", returns nullptr.
   //
   // Else return a handle that corresponds to the mapping.  The caller

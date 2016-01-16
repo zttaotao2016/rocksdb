@@ -18,7 +18,6 @@
 #include "cache/cache_util.h"
 #include "util/testharness.h"
 #include "util/arena.h"
-#include "db/db_test_util.h"
 #include "table/block_builder.h"
 
 using namespace std;
@@ -293,6 +292,7 @@ TEST_F(BlockCacheImplTest, TieredCacheInsertWithEviction) {
   }
 }
 
+#if 0
 //
 // RocksDB tests
 //
@@ -496,7 +496,7 @@ TEST_F(BlkCacheDBTest, BlockCacheTest) {
 TEST_F(BlkCacheDBTest, TieredCacheTest) {
   RunTest(std::bind(&BlkCacheDBTest::MakeTieredCache, this));
 }
-
+#endif
 }  // namespace rocksdb
 
 int main(int argc, char** argv) {

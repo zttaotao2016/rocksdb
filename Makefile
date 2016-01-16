@@ -288,13 +288,6 @@ TESTS = \
 	sst_dump_test \
 	compact_files_test \
 	perf_context_test \
-	optimistic_transaction_test \
-	write_callback_test \
-	heap_test \
-	compact_on_deletion_collector_test \
-	compaction_job_stats_test \
-	transaction_test \
-	ldb_cmd_test \
 	blockcache_test \
 	hash_table_test \
 
@@ -846,28 +839,19 @@ sst_dump: tools/sst_dump.o $(LIBOBJECTS)
 
 blkcache_test: blkcache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
 
-blkcache_test: cache/blkcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+blkcache_test: cache/blkcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-hash_table_test: cache/hash_table_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+hash_table_test: cache/hash_table_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-hash_table_microbench: cache/hash_table_microbench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+hash_table_bench: cache/hash_table_bench.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-blockcache_test: cache/blockcache_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+blockcache_test: cache/blockcache_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
-hash_table_test: cache/hash_table_test.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-hash_table_bench: cache/hash_table_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-blockcache_bench: cache/blockcache_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
-	$(AM_LINK)
-
-ldb: tools/ldb.o $(LIBOBJECTS)
+blockcache_bench: cache/blockcache_bench.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)

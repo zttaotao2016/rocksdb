@@ -46,7 +46,9 @@ class Status {
   static Status Corruption(const Slice& msg, const Slice& msg2 = Slice()) {
     return Status(kCorruption, msg, msg2);
   }
-  static Status NotSupported(const Slice& msg, const Slice& msg2 = Slice()) {
+
+  static Status NotSupported(const Slice& msg = "NotSupported",
+                             const Slice& msg2 = Slice()) {
     return Status(kNotSupported, msg, msg2);
   }
   static Status InvalidArgument(const Slice& msg, const Slice& msg2 = Slice()) {
@@ -79,6 +81,13 @@ class Status {
   }
   static Status Aborted(const Slice& msg, const Slice& msg2 = Slice()) {
     return Status(kAborted, msg, msg2);
+  }
+
+  static Status TryAgain() {
+    return Status(kTryAgain);
+  }
+  static Status TryAgain(const Slice& msg, const Slice& msg2 = Slice()) {
+    return Status(kTryAgain, msg, msg2);
   }
 
   // Returns true iff the status indicates success.
@@ -127,7 +136,8 @@ class Status {
     kIncomplete = 7,
     kShutdownInProgress = 8,
     kTimedOut = 9,
-    kAborted = 10
+    kAborted = 10,
+    kTryAgain=13,
   };
 
   Code code() const {

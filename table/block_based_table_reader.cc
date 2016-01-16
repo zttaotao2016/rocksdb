@@ -195,7 +195,7 @@ class HashIndexReader : public IndexReader {
                        const Footer& footer, RandomAccessFile* file, Env* env,
                        const Comparator* comparator,
                        const BlockHandle& index_handle,
-                       InternalIterator* meta_index_iter,
+                       Iterator* meta_index_iter,
                        IndexReader** index_reader,
                        bool hash_index_allow_collision,
                        const PageCacheOptions& cache_options) {
@@ -394,7 +394,7 @@ void BlockBasedTable::SetupCacheKeyPrefix(Rep* rep) {
                         &rep->cache_key_prefix_size);
   }
   if (rep->table_options.page_cache != nullptr) {
-    GenerateCachePrefix(/*cache=*/ nullptr, rep->file->file(),
+    GenerateCachePrefix(/*cache=*/ nullptr, rep->file.get(),
                         &rep->page_cache_key_prefix[0],
                         &rep->page_cache_key_prefix_size);
   }
@@ -775,9 +775,9 @@ Status BlockBasedTable::PutDataBlockToCache(
   // insert into uncompressed block cache
   assert((block->value->compression_type() == kNoCompression));
   if (block_cache != nullptr && block->value->cachable()) {
-    block->cache_handle = block_cache->InsertBlock(block_cache_key,
-                                                   block->value,
-                                                   &DeleteCachedEntry<Block>);
+    block->cache_handle =
+        block_cache->Insert(block_cache_key, block->value, block->value->size(),
+                            &DeleteCachedEntry<Block>);
     RecordTick(statistics, BLOCK_CACHE_ADD);
     assert(reinterpret_cast<Block*>(block_cache->Value(block->cache_handle)) ==
            block->value);
@@ -797,7 +797,7 @@ FilterBlockReader* BlockBasedTable::ReadFilter(
     if (FindMetaBlock(meta_index_iter, filter_block_key, &handle).ok()) {
       BlockContents block;
       if (!ReadBlockContents(rep->file.get(), rep->footer, ReadOptions(),
-                             rep->filter_handle, &block, rep->ioptions.env,
+                             handle, &block, rep->ioptions.env,
                              false /* decompress */,
                              rep->page_cache_options).ok()) {
         // Error reading the block
