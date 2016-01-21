@@ -4,6 +4,7 @@
 #include <sys/time.h>
 
 #include "include/rocksdb/env.h"
+#include "include/rocksdb/cache_tier.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
 

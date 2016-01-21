@@ -7,6 +7,14 @@
 #include "include/rocksdb/status.h"
 #include "include/rocksdb/page_cache.h"
 
+#ifndef UINT64_MAX
+#define UINT64_MAX (18446744073709551615ULL)
+#endif
+
+#ifndef UINT32_MAX
+#define UINT32_MAX (4294967295UL)
+#endif
+
 namespace rocksdb {
 
 //
