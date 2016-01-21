@@ -250,9 +250,9 @@ class CacheTierBenchmark {
 //
 int
 main(int argc, char** argv) {
-  google::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
+  GFLAGS::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
                           " [OPTIONS]...");
-  google::ParseCommandLineFlags(&argc, &argv, false);
+  GFLAGS::ParseCommandLineFlags(&argc, &argv, false);
 
   std::shared_ptr<CacheTier> cache;
   if (FLAGS_cache_type == "block_cache") {
