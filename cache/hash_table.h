@@ -73,15 +73,11 @@ class HashTable {
     assert(nlocks_);
 
     buckets_.reset(new Bucket[nbuckets_]);
-#ifdef NDEBUG
-    LockMem(buckets_, nbuckets_ * sizeof(Bucket));
-#endif
+    mlock(buckets_.get(), nbuckets_ * sizeof(Bucket));
 
     // initialize locks
     locks_.reset(new port::RWMutex[nlocks_]);
-#ifdef NDEBUG
-    LockMem(locks_, nlocks_ * sizeof(port::RWMutex));
-#endif
+    mlock(locks_.get(), nlocks_ * sizeof(port::RWMutex));
 
     // post-conditions
     assert(buckets_);
@@ -185,15 +181,6 @@ class HashTable {
     }
     return list.end();
   }
-
-#ifdef NDEBUG
-  void LockMem(void* const data, const size_t size) {
-    int status = mlock(data, size);
-    if (status) {
-      throw std::runtime_error(strerror(errno));
-    }
-  }
-#endif
 
   bool Insert(Bucket& bucket, const T& t) {
     // Check if the key already exists

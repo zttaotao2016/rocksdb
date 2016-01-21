@@ -90,6 +90,7 @@ class EvictableHashTable : private HashTable<T*, Hash, Equal> {
         T* tmp = nullptr;
         bool status = hash_table::Erase(bucket, t, &tmp);
         assert(t == tmp);
+        (void) status;
         assert(status);
         if (fn) {
           fn(t);
