@@ -177,8 +177,7 @@ class HashTable {
   };
 
   // Substitute for std::find with custom comparator operator
-  typename std::list<T>::const_iterator Find(const std::list<T>& list,
-                                             const T& t) {
+  typename std::list<T>::iterator Find(std::list<T>& list, const T& t) {
     for (auto it = list.begin(); it != list.end(); ++it) {
       if (Equal()(*it, t)) {
         return it;
