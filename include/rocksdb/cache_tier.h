@@ -3,9 +3,9 @@
 #include <iostream>
 #include <list>
 
-#include "include/rocksdb/env.h"
-#include "include/rocksdb/status.h"
-#include "include/rocksdb/page_cache.h"
+#include "rocksdb/env.h"
+#include "rocksdb/status.h"
+#include "rocksdb/page_cache.h"
 
 #ifndef UINT64_MAX
 #define UINT64_MAX (18446744073709551615ULL)
