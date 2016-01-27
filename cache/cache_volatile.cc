@@ -21,12 +21,21 @@ Status VolatileCache::Insert(const Slice& page_key, const void* data,
   assert(data);
   assert(size);
 
-  // clear up space for insertion
+  // increment the size
   size_ += size;
+
+  // check if we have overshot the limit, if so evict some space
   while (size_ > max_size_) {
-    // TODO: Replace this with condition variable
-    Evict();
+    if (!Evict()) {
+      // unable to evict data, we give up so we don't spike read
+      // latency
+      assert(size_ >= size);
+      size_ -= size;
+      return Status::TryAgain("Unable to evict any data");
+    }
   }
+
+  assert(size_ >= size);
 
   // insert order: LRU, followed by index
   std::string key = std::move(page_key.ToString());
@@ -39,6 +48,10 @@ Status VolatileCache::Insert(const Slice& page_key, const void* data,
     stats_.cache_inserts_++;
     return Status::OK();
   }
+
+  // decrement the size that we incremented ahead of time
+  assert(size_ >= size);
+  size_ -= size;
 
   // failed to insert to cache, block already in cache
   return Status::TryAgain("key already exists in volatile cache");
