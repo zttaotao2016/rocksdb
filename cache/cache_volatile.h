@@ -13,7 +13,8 @@ namespace rocksdb {
 
 class VolatileCache : public CacheTier {
  public:
-  explicit VolatileCache(const size_t max_size = UINT64_MAX)
+  explicit VolatileCache(
+    const size_t max_size = std::numeric_limits<size_t>::max())
     : max_size_(max_size) {}
 
   virtual ~VolatileCache();

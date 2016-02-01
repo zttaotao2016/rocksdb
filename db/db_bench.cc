@@ -533,7 +533,8 @@ DEFINE_bool(enable_tiered_block_cache, false,
 DEFINE_string(block_cache_path, "/tmp/cache",
               "Path to store the block cache data");
 
-DEFINE_uint64(block_cache_size, UINT64_MAX, "Block cache size");
+DEFINE_uint64(block_cache_size, std::numeric_limits<uint64_t>::max(),
+              "Block cache size");
 
 namespace {
 enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {

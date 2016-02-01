@@ -2,6 +2,7 @@
 
 #include <list>
 #include <sys/time.h>
+#include <limits>
 
 #include "include/rocksdb/env.h"
 #include "port/port_posix.h"
@@ -32,7 +33,8 @@ class ConsoleLogger : public Logger {
 template<class T>
 class BoundedQueue {
  public:
-  BoundedQueue(const size_t max_size = UINT64_MAX)
+  explicit BoundedQueue(
+    const size_t max_size = std::numeric_limits<size_t>::max())
     : cond_empty_(&lock_),
       max_size_(max_size) {}
 
@@ -69,7 +71,7 @@ class BoundedQueue {
   port::CondVar cond_empty_;
   std::list<T> q_;
   size_t size_ = 0;
-  const size_t max_size_ = UINT64_MAX;
+  const size_t max_size_;
 };
 
 /**

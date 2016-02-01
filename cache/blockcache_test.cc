@@ -28,12 +28,12 @@ namespace rocksdb {
 // create block cache
 std::unique_ptr<CacheTier> NewBlockCache(
   Env* const env, const std::string& path,
-  const uint64_t max_size = UINT64_MAX) {
+  const uint64_t max_size = std::numeric_limits<uint64_t>::max()) {
   const uint32_t max_file_size = 12 * 1024 * 1024;
   std::shared_ptr<Logger> log(new ConsoleLogger());
   BlockCacheOptions opt(env, path, max_size, log);
   opt.cache_file_size = max_file_size;
-  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   std::unique_ptr<CacheTier> scache(new BlockCacheImpl(opt));
   Status s = scache->Open();
   assert(s.ok());
@@ -44,10 +44,10 @@ std::unique_ptr<CacheTier> NewBlockCache(
 std::unique_ptr<TieredCache> NewTieredCache(
   Env* const env, const std::string& path,
   const uint64_t max_volatile_cache_size,
-  const uint64_t max_block_cache_size = UINT64_MAX) {
+  const uint64_t max_block_cache_size = std::numeric_limits<uint64_t>::max()) {
   std::shared_ptr<Logger> log(new ConsoleLogger());
   auto opt = BlockCacheOptions(env, path, max_block_cache_size, log);
-  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   // create tier out of the two caches
   auto cache = TieredCache::New(max_volatile_cache_size, opt);
   return std::move(cache);
@@ -381,25 +381,27 @@ class BlkCacheDBTest : public DBTestBase {
       assert(page_cache);
       table_options.page_cache = page_cache;
 
+      const uint64_t uint64_max = std::numeric_limits<uint64_t>::max();
+
       switch (iter) {
         case 0:
           // page cache, block cache, no-compressed cache
-          table_options.block_cache = NewLRUCache(UINT64_MAX);
+          table_options.block_cache = NewLRUCache(uint64_max);
           table_options.block_cache_compressed = nullptr;
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           break;
         case 1:
           // page cache, block cache, compressed cache
-          table_options.block_cache = NewLRUCache(UINT64_MAX);
-          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
+          table_options.block_cache = NewLRUCache(uint64_max);
+          table_options.block_cache_compressed = NewLRUCache(uint64_max);
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           break;
         case 2:
           // page cache, block cache, compressed cache + KNoCompression
           // both block cache and compressed cache, but DB is not compressed
           // also, make block cache sizes bigger, to trigger block cache hits
-          table_options.block_cache = NewLRUCache(UINT64_MAX);
-          table_options.block_cache_compressed = NewLRUCache(UINT64_MAX);
+          table_options.block_cache = NewLRUCache(uint64_max);
+          table_options.block_cache_compressed = NewLRUCache(uint64_max);
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
           options.compression = kNoCompression;
           break;

@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <list>
+#include <limits>
 
 #include "include/rocksdb/env.h"
 #include "include/rocksdb/status.h"
@@ -39,7 +40,7 @@ struct BlockCacheOptions {
   std::shared_ptr<Logger> log;
 
   // Logical cache size
-  uint64_t cache_size = UINT64_MAX;
+  uint64_t cache_size = std::numeric_limits<uint64_t>::max();
 
   // Cache consists of multiples of small files. This is the size of individual
   // cache file

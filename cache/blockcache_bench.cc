@@ -21,7 +21,7 @@ DEFINE_int32(nsec, 10, "nsec");
 DEFINE_int32(nthread_write, 1, "Insert threads");
 DEFINE_int32(nthread_read, 1, "Lookup threads");
 DEFINE_string(path, "/tmp/microbench/blkcache", "Path for cachefile");
-DEFINE_uint64(cache_size, UINT64_MAX, "Cache size");
+DEFINE_uint64(cache_size, std::numeric_limits<uint64_t>::max(), "Cache size");
 DEFINE_int32(iosize, 4*1024, "IO size");
 DEFINE_bool(enable_pipelined_writes, false, "Enable async writes");
 DEFINE_string(cache_type, "block_cache",
@@ -30,7 +30,7 @@ DEFINE_bool(benchmark, false, "Benchmark mode");
 DEFINE_int32(volatile_cache_pct, 10, "Percentage of cache in memory tier.");
 
 std::unique_ptr<CacheTier> NewVolatileCache() {
-  assert(FLAGS_cache_size != UINT64_MAX);
+  assert(FLAGS_cache_size != std::numeric_limits<uint64_t>::max());
   std::unique_ptr<CacheTier> pcache(new VolatileCache(FLAGS_cache_size));
   return pcache;
 }
@@ -41,7 +41,7 @@ std::unique_ptr<CacheTier> NewBlockCache() {
   auto log = shared_ptr<Logger>(new ConsoleLogger());
   BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log);
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
-  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   std::unique_ptr<CacheTier> cache(new BlockCacheImpl(opt));
   status = cache->Open();
   return cache;
@@ -53,7 +53,7 @@ std::unique_ptr<TieredCache> NewTieredCache() {
   auto pct = FLAGS_volatile_cache_pct / (double) 100;
   BlockCacheOptions opt(env, FLAGS_path, (1 - pct) * FLAGS_cache_size, log);
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
-  opt.max_write_pipeline_backlog_size = UINT64_MAX;
+  opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   return std::move(TieredCache::New(FLAGS_cache_size * pct, opt));
 }
 
