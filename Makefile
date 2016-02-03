@@ -349,7 +349,7 @@ TOOLS = \
 
 # TODO: add back forward_iterator_bench, after making it build in all environemnts.
 BENCHMARKS = db_bench table_reader_bench cache_bench memtablerep_bench \
-             hash_table_bench blockcache_bench
+             hash_table_bench blockcache_bench block_bench
 
 # if user didn't config LIBNAME, set the default
 ifeq ($(LIBNAME),)
@@ -997,6 +997,9 @@ hash_table_bench: cache/hash_table_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TE
 	$(AM_LINK)
 
 blockcache_bench: cache/blockcache_bench.o db/db_test_util.o  $(LIBOBJECTS) $(TESTHARNESS)
+	$(AM_LINK)
+
+block_bench: cache/block_bench.o $(LIBOBJECTS) $(TESTUTIL)
 	$(AM_LINK)
 
 ldb: tools/ldb.o $(LIBOBJECTS)
