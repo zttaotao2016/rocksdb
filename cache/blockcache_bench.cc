@@ -8,6 +8,7 @@
 #include "cache/cache_util.h"
 #include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
+#include "cache/cache_env.h"
 #include "include/rocksdb/env.h"
 #include "table/block_builder.h"
 #include "port/port_posix.h"
@@ -22,7 +23,9 @@ DEFINE_int32(nthread_write, 1, "Insert threads");
 DEFINE_int32(nthread_read, 1, "Lookup threads");
 DEFINE_string(path, "/tmp/microbench/blkcache", "Path for cachefile");
 DEFINE_uint64(cache_size, std::numeric_limits<uint64_t>::max(), "Cache size");
-DEFINE_int32(iosize, 4*1024, "IO size");
+DEFINE_int32(iosize, 4 * 1024, "Read IO size");
+DEFINE_int32(writer_iosize, 4 * 1024, "File writer IO size");
+DEFINE_int32(writer_qdepth, 1, "File writer qdepth");
 DEFINE_bool(enable_pipelined_writes, false, "Enable async writes");
 DEFINE_string(cache_type, "block_cache",
               "Cache type. (block_cache, volatile, tiered)");
@@ -35,11 +38,14 @@ std::unique_ptr<CacheTier> NewVolatileCache() {
   return pcache;
 }
 
+static std::shared_ptr<Env> env(new CacheEnv(Env::Default()));
+
 std::unique_ptr<CacheTier> NewBlockCache() {
   Status status;
-  Env* env = Env::Default();
   auto log = shared_ptr<Logger>(new ConsoleLogger());
-  BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log);
+  BlockCacheOptions opt(env.get(), FLAGS_path, FLAGS_cache_size, log);
+  opt.writer_dispatch_size = FLAGS_writer_iosize;
+  opt.writer_qdepth = FLAGS_writer_qdepth;
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
   opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   std::unique_ptr<CacheTier> cache(new BlockCacheImpl(opt));
@@ -48,10 +54,12 @@ std::unique_ptr<CacheTier> NewBlockCache() {
 }
 
 std::unique_ptr<TieredCache> NewTieredCache() {
-  Env* env = Env::Default();
   auto log = shared_ptr<Logger>(new ConsoleLogger());
   auto pct = FLAGS_volatile_cache_pct / (double) 100;
-  BlockCacheOptions opt(env, FLAGS_path, (1 - pct) * FLAGS_cache_size, log);
+  BlockCacheOptions opt(env.get(), FLAGS_path, (1 - pct) * FLAGS_cache_size,
+                        log);
+  opt.writer_dispatch_size = FLAGS_writer_iosize;
+  opt.writer_qdepth = FLAGS_writer_qdepth;
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
   opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   return std::move(TieredCache::New(FLAGS_cache_size * pct, opt));
@@ -64,8 +72,12 @@ class CacheTierBenchmark {
  public:
   CacheTierBenchmark(std::shared_ptr<CacheTier>&& cache)
     : cache_(cache) {
-    Prepop();
-    std::cout << "Pre-population completed" << std::endl;
+    if (FLAGS_nthread_read) {
+      std::cout << "Pre-populating" << std::endl;
+      Prepop();
+      std::cout << "Pre-population completed" << std::endl;
+    }
+
     stats_.Clear();
 
     // Start IO threads
@@ -253,6 +265,20 @@ main(int argc, char** argv) {
   google::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
                           " [OPTIONS]...");
   google::ParseCommandLineFlags(&argc, &argv, false);
+
+  cout << "Config" << endl
+       << "======" << endl
+       << "* nsec=" << FLAGS_nsec << endl
+       << "* nthread_write=" << FLAGS_nthread_write << endl
+       << "* path=" << FLAGS_path << endl
+       << "* cache_size=" << FLAGS_cache_size << endl
+       << "* iosize=" << FLAGS_iosize << endl
+       << "* writer_iosize=" << FLAGS_writer_iosize << endl
+       << "* writer_qdepth=" << FLAGS_writer_qdepth << endl
+       << "* enable_pipelined_writes=" << FLAGS_enable_pipelined_writes << endl
+       << "* cache_type=" << FLAGS_cache_type << endl
+       << "* benchmark=" << FLAGS_benchmark << endl
+       << "* volatile_cache_pct=" << FLAGS_volatile_cache_pct << endl;
 
   std::shared_ptr<CacheTier> cache;
   if (FLAGS_cache_type == "block_cache") {

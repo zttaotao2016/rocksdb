@@ -48,7 +48,6 @@ Status BlockCacheFile::Delete(size_t* size) {
 //
 // CacheRecord
 //
-
 struct CacheRecordHeader {
   CacheRecordHeader() {}
   CacheRecordHeader(const uint32_t magic, const uint32_t key_size,
@@ -348,8 +347,11 @@ bool WriteableCacheFile::ExpandBuffer(const size_t size) {
 void WriteableCacheFile::DispatchBuffer() {
   rwlock_.AssertHeld();
 
-  if (is_io_pending_ || bufs_.empty()) {
-    // IO is in progress or there is nothing to write
+  assert(bufs_.size());
+  assert(buf_doff_ <= buf_woff_);
+  assert(buf_woff_ <= bufs_.size());
+
+  if (pending_ios_) {
     return;
   }
 
@@ -360,29 +362,37 @@ void WriteableCacheFile::DispatchBuffer() {
 
   assert(eof_ || buf_doff_ < buf_woff_);
   assert(buf_doff_ < bufs_.size());
-  assert(!is_io_pending_);
   assert(file_);
 
   auto* buf = bufs_[buf_doff_];
-  writer_.Write(this, buf);
-  is_io_pending_ = true;
+  const uint64_t file_off = buf_doff_ * alloc_.BufferSize(); 
+
+  assert(!buf->Free() || (eof_ && buf_doff_ == buf_woff_
+                          && buf_woff_ < bufs_.size()));
+  // we have reached end of file, and there is space in the last buffer
+  // pad it with zero for direct IO
+  buf->FillTrailingZeros();
+
+  assert(buf->Used() % (4 * 1024) == 0);
+
+  writer_.Write(this, buf, file_off);
+  pending_ios_++;
+  buf_doff_++;
 }
 
 void WriteableCacheFile::BufferWriteDone(CacheWriteBuffer* const buf) {
   WriteLock _(&rwlock_);
 
   assert(bufs_.size());
-  assert(bufs_[buf_doff_] == buf);
 
-  is_io_pending_ = false;
-
-  buf_doff_ += 1;
+  pending_ios_--;
 
   if (buf_doff_ < bufs_.size()) {
     DispatchBuffer();
   }
 
-  if (!is_io_pending_ && eof_) {
+  if (eof_ && buf_doff_ >= bufs_.size() && !pending_ios_) {
+    // end-of-file reached, all buffers are dispatched and all IOs are complete
     Close();
     OpenImpl();
   }
@@ -408,8 +418,8 @@ bool WriteableCacheFile::ReadBuffer(const LBA& lba, char* data)
 
   char* tmp = data;
   size_t pending_nbytes = lba.size_;
-  size_t start_idx = lba.off_ / alloc_.buffersize();
-  size_t start_off = lba.off_ % alloc_.buffersize();
+  size_t start_idx = lba.off_ / alloc_.BufferSize();
+  size_t start_off = lba.off_ % alloc_.BufferSize();
 
   assert(start_idx <= buf_woff_);
 
@@ -435,7 +445,6 @@ bool WriteableCacheFile::ReadBuffer(const LBA& lba, char* data)
 
   return true;
 }
-
 
 void WriteableCacheFile::Close() {
   assert(size_ >= max_size_);

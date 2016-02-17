@@ -16,6 +16,7 @@
 #include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
 #include "cache/cache_util.h"
+#include "cache/cache_env.h"
 #include "util/testharness.h"
 #include "util/arena.h"
 #include "db/db_test_util.h"
@@ -27,7 +28,7 @@ namespace rocksdb {
 
 // create block cache
 std::unique_ptr<CacheTier> NewBlockCache(
-  Env* const env, const std::string& path,
+  Env* env, const std::string& path,
   const uint64_t max_size = std::numeric_limits<uint64_t>::max()) {
   const uint32_t max_file_size = 12 * 1024 * 1024;
   std::shared_ptr<Logger> log(new ConsoleLogger());
@@ -40,9 +41,15 @@ std::unique_ptr<CacheTier> NewBlockCache(
   return std::move(scache);
 }
 
+std::unique_ptr<CacheTier> NewBlockCache(
+  std::shared_ptr<Env>& env, const std::string& path,
+  const uint64_t max_size = std::numeric_limits<uint64_t>::max()) {
+  return NewBlockCache(env.get(), path, max_size);
+}
+
 // create a new cache tier
 std::unique_ptr<TieredCache> NewTieredCache(
-  Env* const env, const std::string& path,
+  Env* env, const std::string& path,
   const uint64_t max_volatile_cache_size,
   const uint64_t max_block_cache_size = std::numeric_limits<uint64_t>::max()) {
   std::shared_ptr<Logger> log(new ConsoleLogger());
@@ -53,14 +60,22 @@ std::unique_ptr<TieredCache> NewTieredCache(
   return std::move(cache);
 }
 
+std::unique_ptr<TieredCache> NewTieredCache(
+  std::shared_ptr<Env>& env, const std::string& path,
+  const uint64_t max_volatile_cache_size,
+  const uint64_t max_block_cache_size = std::numeric_limits<uint64_t>::max()) {
+  return NewTieredCache(env.get(), path, max_volatile_cache_size,
+                        max_block_cache_size);
+}
+
 //
 // Unit tests for testing block cache
 //
 class BlockCacheImplTest : public testing::Test {
  public:
   explicit BlockCacheImplTest()
-      : env_(Env::Default()),
-        path_(test::TmpDir(env_) + "/cache_test") {
+      : env_(new CacheEnv(Env::Default())),
+        path_(test::TmpDir(env_.get()) + "/cache_test") {
   }
 
   virtual ~BlockCacheImplTest() {
@@ -220,7 +235,7 @@ class BlockCacheImplTest : public testing::Test {
     cache_.reset();
   }
 
-  Env* env_;
+  std::shared_ptr<Env> env_;
   const std::string path_;
   shared_ptr<Logger> log_;
   std::shared_ptr<CacheTier> cache_;
@@ -302,19 +317,21 @@ static long TestGetTickerCount(const Options& options, Tickers ticker_type) {
 
 class BlkCacheDBTest : public DBTestBase {
  public:
-  BlkCacheDBTest() : DBTestBase("/cache_test") {}
+  BlkCacheDBTest()
+    : DBTestBase("/cache_test"),
+      cache_env_(new CacheEnv(env_)) {}
 
   std::shared_ptr<CacheTier> MakeVolatileCache() {
     return std::make_shared<VolatileCache>();
   }
 
   std::shared_ptr<CacheTier> MakeBlockCache() {
-    return NewBlockCache(env_, dbname_);
+    return NewBlockCache(cache_env_, dbname_);
   }
 
   std::shared_ptr<CacheTier> MakeTieredCache() {
     const auto memory_size = 1 * 1024 * 1024;
-    return NewTieredCache(env_, dbname_, memory_size);
+    return NewTieredCache(cache_env_, dbname_, memory_size);
   }
 
   // insert data to table
@@ -482,6 +499,9 @@ class BlkCacheDBTest : public DBTestBase {
       page_cache->Close();
     }
   }
+
+private:
+  std::shared_ptr<Env> cache_env_;
 };
 
 // test table with volatile page cache

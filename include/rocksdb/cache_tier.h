@@ -23,23 +23,52 @@ struct BlockCacheOptions {
     path = _path;
     log = _log;
     cache_size = _cache_size;
-    cache_file_size = 100ULL * 1024 * 1024;
-    writer_qdepth = 1;
-    write_buffer_size = _write_buffer_size;
-    write_buffer_count = 200;
-    bufferpool_limit = 2ULL * write_buffer_size * write_buffer_count;
+    writer_dispatch_size = write_buffer_size = _write_buffer_size;
   }
 
-  //Env abstraction to use for systmer level operations
+  //
+  // Validate the settings
+  //
+  Status ValidateSettings() const {
+    // check for null and empty
+    if (!env || path.empty()) {
+      return Status::InvalidArgument("empty or null args");
+    }
+
+    // checks related to file size
+    if (cache_size < cache_file_size
+        || write_buffer_size >= cache_file_size
+        || write_buffer_size * write_buffer_count() < 2 * cache_file_size) {
+      return Status::InvalidArgument("invalid cache size");
+    }
+
+    // check writer settings
+    if (!writer_qdepth || writer_dispatch_size > write_buffer_size
+        || write_buffer_size % writer_dispatch_size) {
+      return Status::InvalidArgument("invalid writer settings");
+    }
+
+    return Status::OK();
+  }
+
+  //
+  // Env abstraction to use for systmer level operations
+  //
   Env* env;
 
+  //
   // Path for the block cache where blocks are persisted
+  //
   std::string path;
 
+  //
   // Log handle for logging messages
+  //
   std::shared_ptr<Logger> log;
 
+  //
   // Logical cache size
+  //
   uint64_t cache_size = std::numeric_limits<uint64_t>::max();
 
   // Cache consists of multiples of small files. This is the size of individual
@@ -47,52 +76,48 @@ struct BlockCacheOptions {
   // default: 1M
   uint32_t cache_file_size = 100ULL * 1024 * 1024;
 
-  /**
-   * The writers can issues IO to the devices in parallel. This parameter
-   * controls the qdepth to use for a given block device
-   */
+  // The writers can issues IO to the devices in parallel. This parameter
+  // controls the qdepth to use for a given block device
   uint32_t writer_qdepth = 2;
 
-  /**
-   * Pipeline writes. The write will be delayed and asynchronous. This helps
-   * avoid regression in the eviction code path of the primary tier
-   */
+  // Pipeline writes. The write will be delayed and asynchronous. This helps
+  // avoid regression in the eviction code path of the primary tier
   bool pipeline_writes_ = true;
 
-  /**
-   * Max pipeline buffer size. This is the maximum backlog we can accumulate
-   * while waiting for writes.
-   *
-   * Default: 1GiB
-   */
+   // Max pipeline buffer size. This is the maximum backlog we can accumulate
+   // while waiting for writes.
+   //
+   // Default: 1GiB
   uint64_t max_write_pipeline_backlog_size = 1ULL * 1024 * 1024 * 1024;
 
-  /**
-   * IO size to block device
-   */
-  uint32_t write_buffer_size = 1 * 1024 * 1024;
+  //
+  // IO size to block device
+  //
+  uint32_t write_buffer_size = 1ULL * 1024 * 1024;
 
-  /**
-   * Number of buffers to pool
-   * (should be greater than cache file size)
-   */
-  uint32_t write_buffer_count = 200;
 
-  /**
-   * Buffer poll limit to which it can grow
-   */
-  uint64_t bufferpool_limit = 2ULL * cache_file_size;
+  //
+  // Write buffer count
+  //
+  size_t write_buffer_count() const {
+    assert(write_buffer_size);
+    return (writer_qdepth + 1.2) * cache_file_size / write_buffer_size;
+  }
+
+  // Writer dispatch size. The writer thread will dispatch the IO at the
+  // specified IO size
+  uint64_t writer_dispatch_size = 1ULL * 1024 * 1024;
 
   BlockCacheOptions MakeBlockCacheOptions(const std::string& path,
                                           const uint64_t size,
                                           const std::shared_ptr<Logger>& lg);
 };
 
-/**
- * Represents a logical record on device
- *
- * LBA = { cache-file-id, offset, size }
- */
+//
+// Represents a logical record on device
+//
+// LBA = { cache-file-id, offset, size }
+//
 struct LogicalBlockAddress {
   LogicalBlockAddress() {}
   LogicalBlockAddress(const uint32_t cache_id, const uint32_t off,
@@ -106,18 +131,16 @@ struct LogicalBlockAddress {
 
 typedef LogicalBlockAddress LBA;
 
-/**
- * Abstraction for a general cache tier
- */
+//
+// Abstraction for a general cache tier
+//
 class CacheTier : public PageCache {
  public:
   typedef LogicalBlockAddress LBA;
 
   virtual ~CacheTier() {}
 
-  /**
-   * Create or open an existing cache
-   */
+  // Create or open an existing cache
   virtual Status Open() {
     if (next_tier_) {
       return next_tier_->Open();
@@ -126,9 +149,7 @@ class CacheTier : public PageCache {
     return Status::OK();
   }
 
-  /**
-   * Close cache
-   */
+  // Close cache
   virtual Status Close() {
     if (next_tier_) {
       return next_tier_->Close();
@@ -137,26 +158,20 @@ class CacheTier : public PageCache {
     return Status::OK();
   }
 
-  /**
-   * Expand the cache to accommodate new data
-   */
+  // Expand the cache to accommodate new data
   virtual bool Reserve(const size_t size) {
     // default implementation is a pass through
     return true;
   }
 
-  /**
-   * Remove a given key from the cache
-   */
+  // Remove a given key from the cache
   virtual bool Erase(const Slice& key) {
     // default implementation is a pass through since not all cache tiers might
     // support erase
     return true;
   }
 
-  //
   // Print stats as string
-  //
   virtual std::string PrintStats() {
     if (next_tier_) {
       return next_tier_->PrintStats();
@@ -182,10 +197,9 @@ class CacheTier : public PageCache {
   std::shared_ptr<CacheTier> next_tier_;
 };
 
-/**
- * Abstraction that helps you construct a tiers of caches as a
- * unified cache.
- */
+//
+// Abstraction that helps you construct a tiers of caches as a
+// unified cache.
 class TieredCache : public CacheTier {
  public:
   virtual ~TieredCache() {
@@ -240,9 +254,7 @@ class TieredCache : public CacheTier {
     tiers_.front()->Flush_TEST();
   }
 
-  /**
-   * Factory method for creating tiered cache
-   */
+  // Factory method for creating tiered cache
   static std::unique_ptr<TieredCache> New(const size_t mem_size,
                                           const BlockCacheOptions& options);
 

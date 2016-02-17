@@ -14,8 +14,10 @@ namespace rocksdb {
  */
 struct IO {
   explicit IO(const bool signal) : signal_(signal) {}
-  explicit IO(WriteableCacheFile* const file, CacheWriteBuffer* const buf)
-    : file_(file), buf_(buf) {}
+  explicit IO(WriteableCacheFile* const file, CacheWriteBuffer* const buf,
+              const uint64_t file_off)
+    : file_(file), buf_(buf),
+      file_off_(file_off) {}
 
   IO(const IO&) = default;
   IO& operator=(const IO&) = default;
@@ -23,6 +25,7 @@ struct IO {
 
   WriteableCacheFile* const file_ = nullptr;  // File to write to
   CacheWriteBuffer* const buf_ = nullptr;     // buffer to write
+  uint64_t file_off_ = 0;                     // file offset
   bool signal_ = false;                       // signal to processor
 };
 
@@ -32,8 +35,9 @@ struct IO {
  */
 class ThreadedWriter : public Writer {
  public:
-  ThreadedWriter(CacheTier* const cache, const size_t qdepth = 1)
-      : Writer(cache) {
+  ThreadedWriter(CacheTier* const cache, const size_t qdepth,
+                 const size_t io_size)
+      : Writer(cache), io_size_(io_size) {
     for (size_t i = 0; i < qdepth; ++i) {
       std::thread th(&ThreadedWriter::ThreadMain, this);
       threads_.push_back(std::move(th));
@@ -54,8 +58,9 @@ class ThreadedWriter : public Writer {
     }
   }
 
-  void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) override {
-    q_.Push(IO(file, buf));
+  void Write(WriteableCacheFile* file, CacheWriteBuffer* buf,
+             const uint64_t file_off) override {
+    q_.Push(IO(file, buf, file_off));
   }
 
  private:
@@ -64,31 +69,41 @@ class ThreadedWriter : public Writer {
    */
   void ThreadMain() {
     while (true) {
+      // Fetch the IO to process
       IO io(q_.Pop());
-
       if (io.signal_) {
         // that's secret signal to exit
         break;
       }
 
-      while(!cache_->Reserve(io.buf_->Used())) {
-        // Why would we fail to reserve space ? IO error on disk is the only
-        // reasonable explanation
+      // Reserve space for writing the buffer
+      while (!cache_->Reserve(io.buf_->Used())) {
+        // We can fail to reserve space if every file in the system
         sleep(1);
       }
 
-      Slice data(io.buf_->Data(), io.buf_->Used());
-      Status s = io.file_->file_->Append(data);
-      if (!s.ok()) {
-        // That is definite IO error to device. There is not much we can
-        // do but ignore the failure. This can lead to corruption of data (!)
-        continue;
-      }
-      assert(s.ok());
+      DispatchIO(io);
+
       io.file_->BufferWriteDone(io.buf_);
     }
   }
 
+  void DispatchIO(const IO& io) {
+    size_t written = 0;
+    while (written < io.buf_->Used()) {
+      Slice data(io.buf_->Data() + written, io_size_);
+      Status s = io.file_->file_->PositionedAppend(
+        data, io.file_off_ + written);
+      if (!s.ok()) {
+        // That is definite IO error to device. There is not much we can
+        // do but ignore the failure. This can lead to corruption of data on
+        // disk, but the cache will skip while reading
+      }
+      written += io_size_;
+    }
+  }
+
+  const size_t io_size_;
   BoundedQueue<IO> q_;
   std::vector<std::thread> threads_;
 };

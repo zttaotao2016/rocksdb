@@ -42,7 +42,8 @@ class Writer {
   }
   virtual ~Writer() {}
 
-  virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf) = 0;
+  virtual void Write(WriteableCacheFile* file, CacheWriteBuffer* buf,
+                     const uint64_t file_off) = 0;
   virtual void Stop() = 0;
 
   CacheTier* const cache_;
@@ -91,8 +92,9 @@ class BlockCacheFile : public LRUElement<BlockCacheFile>
 
   virtual Status Delete(size_t* size);
 
- protected:
+  uint32_t Id() const { return cache_id_; }
 
+ protected:
   Env* const env_ = nullptr;
   const std::string dir_;
   const uint32_t cache_id_;
@@ -148,7 +150,6 @@ class RandomAccessCacheFile : public BlockCacheFile {
  */
 class WriteableCacheFile : public RandomAccessCacheFile {
  public:
-
   WriteableCacheFile(Env* const env, CacheWriteBufferAllocator& alloc,
                      Writer& writer, const std::string& dir,
                      const uint32_t cache_id, const uint32_t max_size,
@@ -156,13 +157,7 @@ class WriteableCacheFile : public RandomAccessCacheFile {
     : RandomAccessCacheFile(env, dir, cache_id, log),
       alloc_(alloc),
       writer_(writer),
-      size_(0),
-      max_size_(max_size),
-      eof_(false),
-      disk_woff_(0),
-      buf_woff_(0),
-      buf_doff_(0),
-      is_io_pending_(false) {}
+      max_size_(max_size) {}
 
   virtual ~WriteableCacheFile();
 
@@ -183,7 +178,6 @@ class WriteableCacheFile : public RandomAccessCacheFile {
   bool Eof() const { return eof_; }
 
  private:
-
   friend class ThreadedWriter;
 
   bool ReadImpl(const LBA& lba, Slice* key, Slice* block, char* scratch);
@@ -199,13 +193,13 @@ class WriteableCacheFile : public RandomAccessCacheFile {
   Writer& writer_;                      // File writer thread
   std::unique_ptr<WritableFile> file_;  // RocksDB Env file abstraction
   std::vector<CacheWriteBuffer*> bufs_; // Written buffers
-  uint32_t size_;                       // Size of the file
+  uint32_t size_ = 0;                   // Size of the file
   const uint32_t max_size_;             // Max size of the file
-  bool eof_;                            // End of file
-  uint32_t disk_woff_;                  // Offset 
-  size_t buf_woff_;                     // off into bufs_ to write
-  size_t buf_doff_;                     // off into bufs_ to dispatch
-  bool is_io_pending_;                  // Is a write to disk pending ?
+  bool eof_ = false;                    // End of file
+  uint32_t disk_woff_ = 0;              // Offset 
+  size_t buf_woff_ = 0;                 // off into bufs_ to write
+  size_t buf_doff_ = 0;                 // off into bufs_ to dispatch
+  size_t pending_ios_ = 0;              // Number of ios to disk in-progress
 };
 
 } // namespace rocksdb

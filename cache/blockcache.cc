@@ -14,9 +14,15 @@ Status BlockCacheImpl::Open() {
 
   assert(!size_);
 
-  //
+  // Check the validity of the options
+  status = opt_.ValidateSettings();
+  assert(status.ok());
+  if (!status.ok()) {
+    Error(opt_.log, "Invalid block cache options");
+    return status;
+  }
+
   // Create directory
-  //
   status = opt_.env->CreateDirIfMissing(opt_.path);
   if (!status.ok()) {
     Error(opt_.log, "Error creating directory %s. %s", opt_.path.c_str(),
@@ -24,9 +30,7 @@ Status BlockCacheImpl::Open() {
     return status;
   }
 
-  //
   // Create directory
-  //
   status = opt_.env->CreateDirIfMissing(GetCachePath());
   if (!status.ok()) {
     Error(opt_.log, "Error creating directory %s. %s",
@@ -34,11 +38,9 @@ Status BlockCacheImpl::Open() {
     return status;
   }
 
-  Info(opt_.log, "Resetting directory %s", opt_.path.c_str());
-
-  assert(!cacheFile_);
+  assert(!cache_file_);
   NewCacheFile();
-  assert(cacheFile_);
+  assert(cache_file_);
 
   return Status::OK();
 }
@@ -95,7 +97,7 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
   // pre-condition
   assert(buf);
   assert(size);
-  assert(cacheFile_);
+  assert(cache_file_);
 
   WriteLock _(&lock_);
 
@@ -106,20 +108,20 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
   }
 
   Slice data(buf.get(), size);
-  while (!cacheFile_->Append(key, data, &lba)) {
-    if (!cacheFile_->Eof()) {
-      // add condition variable driven logic here
-      Debug(opt_.log, "Error inserting to cache file %d", cacheFile_->cacheid());
+  while (!cache_file_->Append(key, data, &lba)) {
+    if (!cache_file_->Eof()) {
+      Debug(opt_.log, "Error inserting to cache file %d",
+            cache_file_->cacheid());
       return Status::TryAgain();
     }
 
-    assert(cacheFile_->Eof());
+    assert(cache_file_->Eof());
     NewCacheFile();
   }
 
   // Insert into lookup index
   BlockInfo* info = new BlockInfo(key, lba);
-  cacheFile_->Add(info);
+  cache_file_->Add(info);
   bool status = metadata_.Insert(info);
   (void) status;
   assert(status);
@@ -188,19 +190,19 @@ bool BlockCacheImpl::Erase(const Slice& key) {
 void BlockCacheImpl::NewCacheFile() {
   lock_.AssertHeld();
 
-  Info(opt_.log, "Creating cache file %d", writerCacheId_);
+  Info(opt_.log, "Creating cache file %d", writer_cache_id_);
 
-  writerCacheId_++;
+  writer_cache_id_++;
 
-  cacheFile_ = new WriteableCacheFile(opt_.env, bufferAllocator_, writer_,
-                                      GetCachePath(), writerCacheId_,
-                                      opt_.cache_file_size, opt_.log);
+  cache_file_ = new WriteableCacheFile(opt_.env, buffer_allocator_, writer_,
+                                       GetCachePath(), writer_cache_id_,
+                                       opt_.cache_file_size, opt_.log);
   bool status;
-  status = cacheFile_->Create();
+  status = cache_file_->Create();
   assert(status);
 
   // insert to cache files tree
-  status = metadata_.Insert(cacheFile_);
+  status = metadata_.Insert(cache_file_);
   (void) status;
   assert(status);
 }

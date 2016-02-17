@@ -35,13 +35,10 @@ class BlockCacheImpl : public CacheTier {
     : opt_(opt),
       insert_ops_(opt_.max_write_pipeline_backlog_size),
       insert_th_(&BlockCacheImpl::InsertMain, this),
-      writer_(this, opt_.writer_qdepth) {
-    Info(opt_.log, "Initializing allocator. size=%d B count=%d limit=%d B",
-         opt_.write_buffer_size, opt_.write_buffer_count,
-         opt_.bufferpool_limit);
-
-    bufferAllocator_.Init(opt.write_buffer_size, opt.write_buffer_count,
-                          opt.bufferpool_limit);
+      buffer_allocator_(opt.write_buffer_size, opt.write_buffer_count()),
+      writer_(this, opt_.writer_qdepth, opt_.writer_dispatch_size) {
+    Info(opt_.log, "Initializing allocator. size=%d B count=%d",
+         opt_.write_buffer_size, opt_.write_buffer_count());
   }
 
   virtual ~BlockCacheImpl() {}
@@ -143,9 +140,9 @@ class BlockCacheImpl : public CacheTier {
   const BlockCacheOptions opt_;         // BlockCache options
   BoundedQueue<InsertOp> insert_ops_;   // Ops waiting for insert
   std::thread insert_th_;               // Insert thread
-  uint32_t writerCacheId_ = 0;          // Current cache file identifier
-  WriteableCacheFile* cacheFile_ = nullptr;   // Current cache file reference
-  CacheWriteBufferAllocator bufferAllocator_; // Buffer provider
+  uint32_t writer_cache_id_ = 0;        // Current cache file identifier
+  WriteableCacheFile* cache_file_ = nullptr;   // Current cache file reference
+  CacheWriteBufferAllocator buffer_allocator_; // Buffer provider
   ThreadedWriter writer_;               // Writer threads
   BlockCacheMetadata metadata_;         // Cache meta data manager
   std::atomic<uint64_t> size_{0};       // Size of the cache

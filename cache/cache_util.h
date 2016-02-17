@@ -42,11 +42,15 @@ class BoundedQueue {
 
   void Push(T&& t) {
     MutexLock _(&lock_);
-    if (size_ + t.Size() < max_size_) {
-      size_ += t.Size();
-      q_.push_back(std::move(t));
-      cond_empty_.SignalAll();
+    if (max_size_ != std::numeric_limits<size_t>::max()
+        && size_ + t.Size() >= max_size_) {
+      // overflow
+      return;
     }
+
+    size_ += t.Size();
+    q_.push_back(std::move(t));
+    cond_empty_.SignalAll();
   }
 
   T Pop() {
