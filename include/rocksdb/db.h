@@ -252,6 +252,12 @@ class DB {
     return Get(options, DefaultColumnFamily(), key, value);
   }
 
+  // Call this before SingleDelete() to make sure you can call SingleDelete
+  // safely. boolean can_i is set to true if you can, false if you can't. Status
+  // is OK unless corruption or IO error when reading
+  virtual Status ExperimentalAssertICanSingleDeleteThisKey(const Slice& key,
+                                                           bool* can_i) = 0;
+
   // If keys[i] does not exist in the database, then the i'th returned
   // status will be one for which Status::IsNotFound() is true, and
   // (*values)[i] will be set to some arbitrary value (often ""). Otherwise,

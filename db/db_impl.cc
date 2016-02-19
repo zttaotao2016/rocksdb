@@ -3234,6 +3234,56 @@ Status DBImpl::Get(const ReadOptions& read_options,
   return GetImpl(read_options, column_family, key, value);
 }
 
+Status DBImpl::ExperimentalAssertICanSingleDeleteThisKey(const Slice& key,
+                                                         bool* can_i) {
+  auto cfd = default_cf_handle_->cfd();
+  ReadOptions ro;
+  SuperVersion* sv = cfd->GetSuperVersion()->Ref();
+  Arena arena;
+  ScopedArenaIterator iter(NewInternalIterator(ro, cfd, sv, &arena));
+
+  InternalKey key_start(key, kMaxSequenceNumber, kTypeValue);
+
+  // If P is put and D is delete:
+  // D* is not okay
+  // PD* is okay
+  // PP* is not okay
+  //
+  // anything with merge is not okay
+  *can_i = true;
+  int puts_in_a_row = 0;
+  for (iter->Seek(key_start.Encode()); iter->Valid(); iter->Next()) {
+    ParsedInternalKey ikey;
+    if (!ParseInternalKey(iter->key(), &ikey)) {
+      return Status::Corruption("Corrupted internal key");
+    }
+    if (cfd->internal_comparator().user_comparator()->Compare(ikey.user_key,
+                                                              key) != 0) {
+      // no longer my key
+      break;
+    }
+
+    if (ikey.type == kTypeDeletion || ikey.type == kTypeSingleDeletion) {
+      // If I got to deletion, I need at least one put before it, otherwise I'm
+      // singledelete-ing nothing
+      *can_i = puts_in_a_row == 1;
+      break;
+    } else if (ikey.type == kTypeValue) {
+      ++puts_in_a_row;
+      if (puts_in_a_row >= 2) {
+        *can_i = false;
+        break;
+      }
+    } else if (ikey.type == kTypeMerge) {
+      // don't SingleDelete() me on a merge!
+      *can_i = false;
+      break;
+    }
+  }
+
+  return iter->status();
+}
+
 // JobContext gets created and destructed outside of the lock --
 // we
 // use this convinently to:

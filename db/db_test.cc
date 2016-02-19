@@ -246,6 +246,22 @@ TEST_F(DBTest, WriteEmptyBatch) {
   ASSERT_EQ("bar", Get(1, "foo"));
 }
 
+TEST_F(DBTest, ExperimentalAssertICanSingleDeleteThisKeyTest) {
+  bool can_i;
+  ASSERT_OK(Put("foo", "bar"));
+  ASSERT_OK(db_->ExperimentalAssertICanSingleDeleteThisKey("foo", &can_i));
+  ASSERT_TRUE(can_i);
+  ASSERT_OK(Delete("foo"));
+  ASSERT_OK(db_->ExperimentalAssertICanSingleDeleteThisKey("foo", &can_i));
+  ASSERT_FALSE(can_i);
+  ASSERT_OK(Put("foo", "bar"));
+  ASSERT_OK(db_->ExperimentalAssertICanSingleDeleteThisKey("foo", &can_i));
+  ASSERT_TRUE(can_i);
+  ASSERT_OK(Put("foo", "bar"));
+  ASSERT_OK(db_->ExperimentalAssertICanSingleDeleteThisKey("foo", &can_i));
+  ASSERT_FALSE(can_i);
+}
+
 #ifndef ROCKSDB_LITE
 TEST_F(DBTest, ReadOnlyDB) {
   ASSERT_OK(Put("foo", "v1"));
@@ -5025,6 +5041,10 @@ class ModelDB: public DB {
     WriteBatch batch;
     batch.Put(cf, k, v);
     return Write(o, &batch);
+  }
+  Status ExperimentalAssertICanSingleDeleteThisKey(const Slice& key,
+                                                   bool* can_i) override {
+    return Status::NotSupported();
   }
   using DB::Delete;
   virtual Status Delete(const WriteOptions& o, ColumnFamilyHandle* cf,

@@ -54,6 +54,11 @@ class StackableDB : public DB {
     return db_->Get(options, column_family, key, value);
   }
 
+  virtual Status ExperimentalAssertICanSingleDeleteThisKey(
+      const Slice& key, bool* can_i) override {
+    return db_->ExperimentalAssertICanSingleDeleteThisKey(key, can_i);
+  }
+
   using DB::MultiGet;
   virtual std::vector<Status> MultiGet(
       const ReadOptions& options,

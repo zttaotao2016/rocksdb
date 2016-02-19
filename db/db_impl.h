@@ -86,6 +86,10 @@ class DBImpl : public DB {
   virtual Status Get(const ReadOptions& options,
                      ColumnFamilyHandle* column_family, const Slice& key,
                      std::string* value) override;
+
+  virtual Status ExperimentalAssertICanSingleDeleteThisKey(
+      const Slice& key, bool* can_i) override;
+
   using DB::MultiGet;
   virtual std::vector<Status> MultiGet(
       const ReadOptions& options,
