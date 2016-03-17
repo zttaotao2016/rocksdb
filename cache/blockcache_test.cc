@@ -74,7 +74,7 @@ std::unique_ptr<TieredCache> NewTieredCache(
 class BlockCacheImplTest : public testing::Test {
  public:
   explicit BlockCacheImplTest()
-      : env_(new CacheEnv(Env::Default())),
+      : env_(new DirectIOEnv(Env::Default())),
         path_(test::TmpDir(env_.get()) + "/cache_test") {
   }
 
@@ -319,7 +319,7 @@ class BlkCacheDBTest : public DBTestBase {
  public:
   BlkCacheDBTest()
     : DBTestBase("/cache_test"),
-      cache_env_(new CacheEnv(env_)) {}
+      cache_env_(new DirectIOEnv(env_)) {}
 
   std::shared_ptr<CacheTier> MakeVolatileCache() {
     return std::make_shared<VolatileCache>();

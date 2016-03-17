@@ -22,9 +22,10 @@
 
 namespace rocksdb {
 
-static Status IOError(const std::string& context, int err_number) {
-  return Status::IOError(context, strerror(err_number));
-}
+class PosixHelper {
+ public:
+  static size_t GetUniqueIdFromFile(int fd, char* id, size_t max_size);
+};
 
 class PosixSequentialFile : public SequentialFile {
  private:

@@ -187,7 +187,7 @@ int RunBenchmark() {
        << "write IOps:"
        << (write_ios / nsec) << endl
        << "write MBps:"
-       << (write_ios * FLAGS_read_iosize / nsec) / 1048576ULL << " MBps" << endl
+       << (write_ios * FLAGS_write_iosize / nsec) / 1048576ULL << " MBps" << endl
        << "read response:"
        << stat_read_response.ToString() << endl
        << "write response:"
@@ -214,6 +214,7 @@ main(int argc, char** argv) {
        << "write_numthreads=" << FLAGS_write_numthreads << endl
        << "read_pattern=" << FLAGS_read_pattern << endl
        << "write_pattern=" << FLAGS_write_pattern << endl
+       << "disable_directio=" << FLAGS_disable_directio << endl
        << "nsec=" << FLAGS_nsec << endl << endl;
 
   return rocksdb::RunBenchmark();

@@ -38,12 +38,17 @@ std::unique_ptr<CacheTier> NewVolatileCache() {
   return pcache;
 }
 
-static std::shared_ptr<Env> env(new CacheEnv(Env::Default()));
+#if defined(OS_LINUX)
+static std::shared_ptr<Env> shared_env(new DirectIOEnv(Env::Default()));
+Env* env = shared_env.get();
+#else
+Env* env = Env::Default();
+#endif
 
 std::unique_ptr<CacheTier> NewBlockCache() {
   Status status;
   auto log = shared_ptr<Logger>(new ConsoleLogger());
-  BlockCacheOptions opt(env.get(), FLAGS_path, FLAGS_cache_size, log);
+  BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log);
   opt.writer_dispatch_size = FLAGS_writer_iosize;
   opt.writer_qdepth = FLAGS_writer_qdepth;
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
@@ -56,8 +61,7 @@ std::unique_ptr<CacheTier> NewBlockCache() {
 std::unique_ptr<TieredCache> NewTieredCache() {
   auto log = shared_ptr<Logger>(new ConsoleLogger());
   auto pct = FLAGS_volatile_cache_pct / (double) 100;
-  BlockCacheOptions opt(env.get(), FLAGS_path, (1 - pct) * FLAGS_cache_size,
-                        log);
+  BlockCacheOptions opt(env, FLAGS_path, (1 - pct) * FLAGS_cache_size, log);
   opt.writer_dispatch_size = FLAGS_writer_iosize;
   opt.writer_qdepth = FLAGS_writer_qdepth;
   opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;

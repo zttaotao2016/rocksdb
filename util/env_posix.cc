@@ -62,6 +62,10 @@
 
 namespace rocksdb {
 
+static Status IOError(const std::string& context, int err_number) {
+  return Status::IOError(context, strerror(err_number));
+}
+
 namespace {
 
 ThreadStatusUpdater* CreateThreadStatusUpdater() {

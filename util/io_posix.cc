@@ -36,6 +36,10 @@
 
 namespace rocksdb {
 
+static Status IOError(const std::string& context, int err_number) {
+  return Status::IOError(context, strerror(err_number));
+}
+
 // A wrapper for fadvise, if the platform doesn't support fadvise,
 // it will simply return Status::NotSupport.
 int Fadvise(int fd, off_t offset, size_t len, int advice) {
@@ -104,40 +108,6 @@ Status PosixSequentialFile::InvalidateCache(size_t offset, size_t length) {
 #endif
 }
 
-#if defined(OS_LINUX)
-namespace {
-static size_t GetUniqueIdFromFile(int fd, char* id, size_t max_size) {
-  if (max_size < kMaxVarint64Length * 3) {
-    return 0;
-  }
-
-  struct stat buf;
-  int result = fstat(fd, &buf);
-  assert(result != -1);
-  if (result == -1) {
-    return 0;
-  }
-
-  long version = 0;
-  result = ioctl(fd, FS_IOC_GETVERSION, &version);
-#if defined(NDEBUG) || !defined(LINUX_RAMFS)
-  assert(result != -1);
-  if (result == -1) {
-    return 0;
-  }
-#endif
-  uint64_t uversion = (uint64_t)version;
-
-  char* rid = id;
-  rid = EncodeVarint64(rid, buf.st_dev);
-  rid = EncodeVarint64(rid, buf.st_ino);
-  rid = EncodeVarint64(rid, uversion);
-  assert(rid >= id);
-  return static_cast<size_t>(rid - id);
-}
-}
-#endif
-
 /*
  * PosixRandomAccessFile
  *
@@ -186,7 +156,37 @@ Status PosixRandomAccessFile::Read(uint64_t offset, size_t n, Slice* result,
 
 #ifdef OS_LINUX
 size_t PosixRandomAccessFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(fd_, id, max_size);
+  return PosixHelper::GetUniqueIdFromFile(fd_, id, max_size);
+}
+
+size_t PosixHelper::GetUniqueIdFromFile(int fd, char* id, size_t max_size) {
+  if (max_size < kMaxVarint64Length * 3) {
+    return 0;
+  }
+
+  struct stat buf;
+  int result = fstat(fd, &buf);
+  assert(result != -1);
+  if (result == -1) {
+    return 0;
+  }
+
+  long version = 0;
+  result = ioctl(fd, FS_IOC_GETVERSION, &version);
+#if defined(NDEBUG) || !defined(LINUX_RAMFS)
+  assert(result != -1);
+  if (result == -1) {
+    return 0;
+  }
+#endif
+  uint64_t uversion = (uint64_t)version;
+
+  char* rid = id;
+  rid = EncodeVarint64(rid, buf.st_dev);
+  rid = EncodeVarint64(rid, buf.st_ino);
+  rid = EncodeVarint64(rid, uversion);
+  assert(rid >= id);
+  return static_cast<size_t>(rid - id);
 }
 #endif
 
@@ -643,7 +643,7 @@ Status PosixWritableFile::RangeSync(uint64_t offset, uint64_t nbytes) {
 }
 
 size_t PosixWritableFile::GetUniqueId(char* id, size_t max_size) const {
-  return GetUniqueIdFromFile(fd_, id, max_size);
+  return PosixHelper::GetUniqueIdFromFile(fd_, id, max_size);
 }
 #endif
 
