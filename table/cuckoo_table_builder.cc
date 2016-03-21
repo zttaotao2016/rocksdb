@@ -1,4 +1,4 @@
-//  Copyright (c) 2014, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -109,8 +109,6 @@ void CuckooTableBuilder::Add(const Slice& key, const Slice& value) {
     status_ = Status::NotSupported("all keys have to be the same size");
     return;
   }
-  // Even if one sequence number is non-zero, then it is not last level.
-  assert(!is_last_level_file_ || ikey.sequence == 0);
 
   if (ikey.type == kTypeValue) {
     if (!has_seen_first_value_) {
@@ -248,7 +246,8 @@ Status CuckooTableBuilder::Finish() {
   if (num_entries_ > 0) {
     // Calculate the real hash size if module hash is enabled.
     if (use_module_hash_) {
-      hash_table_size_ = num_entries_ / max_hash_table_ratio_;
+      hash_table_size_ =
+        static_cast<uint64_t>(num_entries_ / max_hash_table_ratio_);
     }
     s = MakeHashTable(&buckets);
     if (!s.ok()) {
@@ -404,7 +403,8 @@ uint64_t CuckooTableBuilder::FileSize() const {
   }
 
   if (use_module_hash_) {
-    return (key_size_ + value_size_) * num_entries_ / max_hash_table_ratio_;
+    return static_cast<uint64_t>((key_size_ + value_size_) *
+        num_entries_ / max_hash_table_ratio_);
   } else {
     // Account for buckets being a power of two.
     // As elements are added, file size remains constant for a while and

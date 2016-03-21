@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+// Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -304,7 +304,7 @@ inline char* Zlib_Uncompress(const char* input_data, size_t input_length,
         // compress_format_version == 2
         assert(compress_format_version != 2);
         size_t old_sz = output_len;
-        size_t output_len_delta = static_cast<size_t>(output_len * 0.2);
+        uint32_t output_len_delta = output_len/5;
         output_len += output_len_delta < 10 ? 10 : output_len_delta;
         char* tmp = new char[output_len];
         memcpy(tmp, output, old_sz);
@@ -620,7 +620,7 @@ inline bool ZSTD_Compress(const CompressionOptions& opts, const char* input,
   size_t compressBound = ZSTD_compressBound(length);
   output->resize(static_cast<size_t>(output_header_len + compressBound));
   size_t outlen = ZSTD_compress(&(*output)[output_header_len], compressBound,
-                                input, length);
+                                input, length, opts.level);
   if (outlen == 0) {
     return false;
   }

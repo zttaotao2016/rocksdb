@@ -1,4 +1,4 @@
-/*  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+/*  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
   This source code is licensed under the BSD-style license found in the
   LICENSE file in the root directory of this source tree. An additional grant
   of patent rights can be found in the PATENTS file in the same directory.
@@ -663,6 +663,8 @@ extern ROCKSDB_LIBRARY_API void rocksdb_options_set_memtable_prefix_bloom_bits(
     rocksdb_options_t*, uint32_t);
 extern ROCKSDB_LIBRARY_API void
 rocksdb_options_set_memtable_prefix_bloom_probes(rocksdb_options_t*, uint32_t);
+extern ROCKSDB_LIBRARY_API void
+rocksdb_options_set_memtable_prefix_bloom_huge_page_tlb_size(rocksdb_options_t*, size_t);
 
 extern ROCKSDB_LIBRARY_API void rocksdb_options_set_max_successive_merges(
     rocksdb_options_t*, size_t);
@@ -760,6 +762,8 @@ extern ROCKSDB_LIBRARY_API void rocksdb_filterpolicy_destroy(
 
 extern ROCKSDB_LIBRARY_API rocksdb_filterpolicy_t*
 rocksdb_filterpolicy_create_bloom(int bits_per_key);
+extern ROCKSDB_LIBRARY_API rocksdb_filterpolicy_t*
+rocksdb_filterpolicy_create_bloom_full(int bits_per_key);
 
 /* Merge Operator */
 

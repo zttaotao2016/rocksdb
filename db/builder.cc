@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -59,6 +59,7 @@ Status BuildTable(
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
     uint32_t column_family_id, std::vector<SequenceNumber> snapshots,
+    SequenceNumber earliest_write_conflict_snapshot,
     const CompressionType compression,
     const CompressionOptions& compression_opts, bool paranoid_file_checks,
     InternalStats* internal_stats, const Env::IOPriority io_priority,
@@ -96,7 +97,8 @@ Status BuildTable(
                       snapshots.empty() ? 0 : snapshots.back());
 
     CompactionIterator c_iter(iter, internal_comparator.user_comparator(),
-                              &merge, kMaxSequenceNumber, &snapshots, env,
+                              &merge, kMaxSequenceNumber, &snapshots,
+                              earliest_write_conflict_snapshot, env,
                               true /* internal key corruption is not ok */);
     c_iter.SeekToFirst();
     for (; c_iter.Valid(); c_iter.Next()) {

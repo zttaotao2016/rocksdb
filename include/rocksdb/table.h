@@ -121,8 +121,18 @@ struct BlockBasedTableOptions {
 
   // Number of keys between restart points for delta encoding of keys.
   // This parameter can be changed dynamically.  Most clients should
-  // leave this parameter alone.
+  // leave this parameter alone.  The minimum value allowed is 1.  Any smaller
+  // value will be silently overwritten with 1.
   int block_restart_interval = 16;
+
+  // Same as block_restart_interval but used for the index block.
+  int index_block_restart_interval = 1;
+
+  // Use delta encoding to compress keys in blocks.
+  // Iterator::PinData() requires this option to be disabled.
+  //
+  // Default: true
+  bool use_delta_encoding = true;
 
   // If non-nullptr, use the specified filter policy to reduce disk reads.
   // Many applications will benefit from passing the result of
@@ -133,7 +143,7 @@ struct BlockBasedTableOptions {
   // This must generally be true for gets to be efficient.
   bool whole_key_filtering = true;
 
-  // If true, block will not be explictly flushed to disk during building
+  // If true, block will not be explicitly flushed to disk during building
   // a SstTable. Instead, buffer in WritableFileWriter will take
   // care of the flushing when it is full.
   //
@@ -161,7 +171,7 @@ struct BlockBasedTableOptions {
   // this.
   // This option only affects newly written tables. When reading exising tables,
   // the information about version is read from the footer.
-  uint32_t format_version = 0;
+  uint32_t format_version = 2;
 };
 
 // Table Properties that are specific to block-based table properties.

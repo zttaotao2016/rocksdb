@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include "db/db_impl.h"
+#include "db/filename.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
 #include "rocksdb/types.h"
@@ -23,8 +25,8 @@
 #include "util/random.h"
 #include "util/mutexlock.h"
 #include "util/string_util.h"
+#include "util/sync_point.h"
 #include "util/testutil.h"
-#include "util/auto_roll_logger.h"
 #include "util/mock_env.h"
 
 namespace rocksdb {
@@ -230,6 +232,23 @@ class TestEnv : public EnvWrapper {
     return EnvWrapper::GetChildren(dir, r);
   }
 
+  // Some test cases do not actually create the test files (e.g., see
+  // DummyDB::live_files_) - for those cases, we mock those files' attributes
+  // so CreateNewBackup() can get their attributes.
+  void SetFilenamesForMockedAttrs(const std::vector<std::string>& filenames) {
+    filenames_for_mocked_attrs_ = filenames;
+  }
+  Status GetChildrenFileAttributes(
+      const std::string& dir, std::vector<Env::FileAttributes>* r) override {
+    if (filenames_for_mocked_attrs_.size() > 0) {
+      for (const auto& filename : filenames_for_mocked_attrs_) {
+        r->push_back({dir + filename, 10 /* size_bytes */});
+      }
+      return Status::OK();
+    }
+    return EnvWrapper::GetChildrenFileAttributes(dir, r);
+  }
+
   void SetCreateDirIfMissingFailure(bool fail) {
     create_dir_if_missing_failure_ = fail;
   }
@@ -253,6 +272,7 @@ class TestEnv : public EnvWrapper {
   port::Mutex mutex_;
   bool dummy_sequential_file_ = false;
   std::vector<std::string> written_files_;
+  std::vector<std::string> filenames_for_mocked_attrs_;
   uint64_t limit_written_files_ = 1000000;
   uint64_t limit_delete_files_ = 1000000;
 
@@ -448,9 +468,15 @@ class BackupableDBTest : public testing::Test {
     return db;
   }
 
+  void OpenDBAndBackupEngineShareWithChecksum(
+      bool destroy_old_data = false, bool dummy = false,
+      bool share_table_files = true, bool share_with_checksums = false) {
+    backupable_options_->share_files_with_checksum = share_with_checksums;
+    OpenDBAndBackupEngine(destroy_old_data, dummy, share_with_checksums);
+  }
+
   void OpenDBAndBackupEngine(bool destroy_old_data = false, bool dummy = false,
-                             bool share_table_files = true,
-                             bool share_with_checksums = false) {
+                             bool share_table_files = true) {
     // reset all the defaults
     test_backup_env_->SetLimitWrittenFiles(1000000);
     test_db_env_->SetLimitWrittenFiles(1000000);
@@ -466,7 +492,6 @@ class BackupableDBTest : public testing::Test {
     db_.reset(db);
     backupable_options_->destroy_old_data = destroy_old_data;
     backupable_options_->share_table_files = share_table_files;
-    backupable_options_->share_files_with_checksum = share_with_checksums;
     BackupEngine* backup_engine;
     ASSERT_OK(BackupEngine::Open(test_db_env_.get(), *backupable_options_,
                                  &backup_engine));
@@ -538,6 +563,10 @@ class BackupableDBTest : public testing::Test {
   std::string dbname_;
   std::string backupdir_;
 
+  // logger_ must be above backup_engine_ such that the engine's destructor,
+  // which uses a raw pointer to the logger, executes first.
+  std::shared_ptr<Logger> logger_;
+
   // envs
   Env* env_;
   unique_ptr<MockEnv> mock_env_;
@@ -552,8 +581,9 @@ class BackupableDBTest : public testing::Test {
 
   // options
   Options options_;
+
+ protected:
   unique_ptr<BackupableDBOptions> backupable_options_;
-  std::shared_ptr<Logger> logger_;
 }; // BackupableDBTest
 
 void AppendPath(const std::string& path, std::vector<std::string>& v) {
@@ -561,6 +591,159 @@ void AppendPath(const std::string& path, std::vector<std::string>& v) {
     f = path + f;
   }
 }
+
+class BackupableDBTestWithParam : public BackupableDBTest,
+                                  public testing::WithParamInterface<bool> {
+ public:
+  BackupableDBTestWithParam() {
+    backupable_options_->share_files_with_checksum = GetParam();
+  }
+};
+
+// This test verifies that the verifyBackup method correctly identifies
+// invalid backups
+TEST_P(BackupableDBTestWithParam, VerifyBackup) {
+  const int keys_iteration = 5000;
+  Random rnd(6);
+  Status s;
+  OpenDBAndBackupEngine(true);
+  // create five backups
+  for (int i = 0; i < 5; ++i) {
+    FillDB(db_.get(), keys_iteration * i, keys_iteration * (i + 1));
+    ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), true));
+  }
+  CloseDBAndBackupEngine();
+
+  OpenDBAndBackupEngine();
+  // ---------- case 1. - valid backup -----------
+  ASSERT_TRUE(backup_engine_->VerifyBackup(1).ok());
+
+  // ---------- case 2. - delete a file -----------i
+  file_manager_->DeleteRandomFileInDir(backupdir_ + "/private/1");
+  ASSERT_TRUE(backup_engine_->VerifyBackup(1).IsNotFound());
+
+  // ---------- case 3. - corrupt a file -----------
+  std::string append_data = "Corrupting a random file";
+  file_manager_->AppendToRandomFileInDir(backupdir_ + "/private/2",
+                                         append_data);
+  ASSERT_TRUE(backup_engine_->VerifyBackup(2).IsCorruption());
+
+  // ---------- case 4. - invalid backup -----------
+  ASSERT_TRUE(backup_engine_->VerifyBackup(6).IsNotFound());
+  CloseDBAndBackupEngine();
+}
+
+// open DB, write, close DB, backup, restore, repeat
+TEST_P(BackupableDBTestWithParam, OfflineIntegrationTest) {
+  // has to be a big number, so that it triggers the memtable flush
+  const int keys_iteration = 5000;
+  const int max_key = keys_iteration * 4 + 10;
+  // first iter -- flush before backup
+  // second iter -- don't flush before backup
+  for (int iter = 0; iter < 2; ++iter) {
+    // delete old data
+    DestroyDB(dbname_, Options());
+    bool destroy_data = true;
+
+    // every iteration --
+    // 1. insert new data in the DB
+    // 2. backup the DB
+    // 3. destroy the db
+    // 4. restore the db, check everything is still there
+    for (int i = 0; i < 5; ++i) {
+      // in last iteration, put smaller amount of data,
+      int fill_up_to = std::min(keys_iteration * (i + 1), max_key);
+      // ---- insert new data and back up ----
+      OpenDBAndBackupEngine(destroy_data);
+      destroy_data = false;
+      FillDB(db_.get(), keys_iteration * i, fill_up_to);
+      ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), iter == 0));
+      CloseDBAndBackupEngine();
+      DestroyDB(dbname_, Options());
+
+      // ---- make sure it's empty ----
+      DB* db = OpenDB();
+      AssertEmpty(db, 0, fill_up_to);
+      delete db;
+
+      // ---- restore the DB ----
+      OpenBackupEngine();
+      if (i >= 3) {  // test purge old backups
+        // when i == 4, purge to only 1 backup
+        // when i == 3, purge to 2 backups
+        ASSERT_OK(backup_engine_->PurgeOldBackups(5 - i));
+      }
+      // ---- make sure the data is there ---
+      AssertBackupConsistency(0, 0, fill_up_to, max_key);
+      CloseBackupEngine();
+    }
+  }
+}
+
+// open DB, write, backup, write, backup, close, restore
+TEST_P(BackupableDBTestWithParam, OnlineIntegrationTest) {
+  // has to be a big number, so that it triggers the memtable flush
+  const int keys_iteration = 5000;
+  const int max_key = keys_iteration * 4 + 10;
+  Random rnd(7);
+  // delete old data
+  DestroyDB(dbname_, Options());
+
+  OpenDBAndBackupEngine(true);
+  // write some data, backup, repeat
+  for (int i = 0; i < 5; ++i) {
+    if (i == 4) {
+      // delete backup number 2, online delete!
+      ASSERT_OK(backup_engine_->DeleteBackup(2));
+    }
+    // in last iteration, put smaller amount of data,
+    // so that backups can share sst files
+    int fill_up_to = std::min(keys_iteration * (i + 1), max_key);
+    FillDB(db_.get(), keys_iteration * i, fill_up_to);
+    // we should get consistent results with flush_before_backup
+    // set to both true and false
+    ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), !!(rnd.Next() % 2)));
+  }
+  // close and destroy
+  CloseDBAndBackupEngine();
+  DestroyDB(dbname_, Options());
+
+  // ---- make sure it's empty ----
+  DB* db = OpenDB();
+  AssertEmpty(db, 0, max_key);
+  delete db;
+
+  // ---- restore every backup and verify all the data is there ----
+  OpenBackupEngine();
+  for (int i = 1; i <= 5; ++i) {
+    if (i == 2) {
+      // we deleted backup 2
+      Status s = backup_engine_->RestoreDBFromBackup(2, dbname_, dbname_);
+      ASSERT_TRUE(!s.ok());
+    } else {
+      int fill_up_to = std::min(keys_iteration * i, max_key);
+      AssertBackupConsistency(i, 0, fill_up_to, max_key);
+    }
+  }
+
+  // delete some backups -- this should leave only backups 3 and 5 alive
+  ASSERT_OK(backup_engine_->DeleteBackup(4));
+  ASSERT_OK(backup_engine_->PurgeOldBackups(2));
+
+  std::vector<BackupInfo> backup_info;
+  backup_engine_->GetBackupInfo(&backup_info);
+  ASSERT_EQ(2UL, backup_info.size());
+
+  // check backup 3
+  AssertBackupConsistency(3, 0, 3 * keys_iteration, max_key);
+  // check backup 5
+  AssertBackupConsistency(5, 0, max_key);
+
+  CloseBackupEngine();
+}
+
+INSTANTIATE_TEST_CASE_P(BackupableDBTestWithParam, BackupableDBTestWithParam,
+                        ::testing::Bool());
 
 // this will make sure that backup does not copy the same file twice
 TEST_F(BackupableDBTest, NoDoubleCopy) {
@@ -573,6 +756,7 @@ TEST_F(BackupableDBTest, NoDoubleCopy) {
   dummy_db_->live_files_ = { "/00010.sst", "/00011.sst",
                              "/CURRENT",   "/MANIFEST-01" };
   dummy_db_->wal_files_ = {{"/00011.log", true}, {"/00012.log", false}};
+  test_backup_env_->SetFilenamesForMockedAttrs(dummy_db_->live_files_);
   ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), false));
   std::vector<std::string> should_have_written = {
       "/shared/00010.sst.tmp",    "/shared/00011.sst.tmp",
@@ -589,6 +773,7 @@ TEST_F(BackupableDBTest, NoDoubleCopy) {
   dummy_db_->live_files_ = { "/00010.sst", "/00015.sst",
                              "/CURRENT",   "/MANIFEST-01" };
   dummy_db_->wal_files_ = {{"/00011.log", true}, {"/00012.log", false}};
+  test_backup_env_->SetFilenamesForMockedAttrs(dummy_db_->live_files_);
   ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), false));
   // should not open 00010.sst - it's already there
   should_have_written = {
@@ -639,6 +824,7 @@ TEST_F(BackupableDBTest, DifferentEnvs) {
   dummy_db_->live_files_ = { "/00010.sst", "/00011.sst",
                              "/CURRENT",   "/MANIFEST-01" };
   dummy_db_->wal_files_ = {{"/00011.log", true}, {"/00012.log", false}};
+  test_backup_env_->SetFilenamesForMockedAttrs(dummy_db_->live_files_);
   ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), false));
 
   CloseDBAndBackupEngine();
@@ -650,6 +836,7 @@ TEST_F(BackupableDBTest, DifferentEnvs) {
   CloseDBAndBackupEngine();
   DestroyDB(dbname_, Options());
 
+  test_backup_env_->SetFilenamesForMockedAttrs({});
   AssertBackupConsistency(0, 0, 100, 500);
 }
 
@@ -788,39 +975,6 @@ TEST_F(BackupableDBTest, CorruptionsTest) {
   AssertBackupConsistency(2, 0, keys_iteration * 2, keys_iteration * 5);
 }
 
-// This test verifies that the verifyBackup method correctly identifies
-// invalid backups
-TEST_F(BackupableDBTest, VerifyBackup) {
-  const int keys_iteration = 5000;
-  Random rnd(6);
-  Status s;
-  OpenDBAndBackupEngine(true);
-  // create five backups
-  for (int i = 0; i < 5; ++i) {
-    FillDB(db_.get(), keys_iteration * i, keys_iteration * (i + 1));
-    ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), true));
-  }
-  CloseDBAndBackupEngine();
-
-  OpenDBAndBackupEngine();
-  // ---------- case 1. - valid backup -----------
-  ASSERT_TRUE(backup_engine_->VerifyBackup(1).ok());
-
-  // ---------- case 2. - delete a file -----------i
-  file_manager_->DeleteRandomFileInDir(backupdir_ + "/private/1");
-  ASSERT_TRUE(backup_engine_->VerifyBackup(1).IsNotFound());
-
-  // ---------- case 3. - corrupt a file -----------
-  std::string append_data = "Corrupting a random file";
-  file_manager_->AppendToRandomFileInDir(backupdir_ + "/private/2",
-                                         append_data);
-  ASSERT_TRUE(backup_engine_->VerifyBackup(2).IsCorruption());
-
-  // ---------- case 4. - invalid backup -----------
-  ASSERT_TRUE(backup_engine_->VerifyBackup(6).IsNotFound());
-  CloseDBAndBackupEngine();
-}
-
 // This test verifies we don't delete the latest backup when read-only option is
 // set
 TEST_F(BackupableDBTest, NoDeleteWithReadOnly) {
@@ -853,115 +1007,6 @@ TEST_F(BackupableDBTest, NoDeleteWithReadOnly) {
   read_only_backup_engine->GetBackupInfo(&backup_info);
   ASSERT_EQ(5UL, backup_info.size());
   delete read_only_backup_engine;
-}
-
-// open DB, write, close DB, backup, restore, repeat
-TEST_F(BackupableDBTest, OfflineIntegrationTest) {
-  // has to be a big number, so that it triggers the memtable flush
-  const int keys_iteration = 5000;
-  const int max_key = keys_iteration * 4 + 10;
-  // first iter -- flush before backup
-  // second iter -- don't flush before backup
-  for (int iter = 0; iter < 2; ++iter) {
-    // delete old data
-    DestroyDB(dbname_, Options());
-    bool destroy_data = true;
-
-    // every iteration --
-    // 1. insert new data in the DB
-    // 2. backup the DB
-    // 3. destroy the db
-    // 4. restore the db, check everything is still there
-    for (int i = 0; i < 5; ++i) {
-      // in last iteration, put smaller amount of data,
-      int fill_up_to = std::min(keys_iteration * (i + 1), max_key);
-      // ---- insert new data and back up ----
-      OpenDBAndBackupEngine(destroy_data);
-      destroy_data = false;
-      FillDB(db_.get(), keys_iteration * i, fill_up_to);
-      ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), iter == 0));
-      CloseDBAndBackupEngine();
-      DestroyDB(dbname_, Options());
-
-      // ---- make sure it's empty ----
-      DB* db = OpenDB();
-      AssertEmpty(db, 0, fill_up_to);
-      delete db;
-
-      // ---- restore the DB ----
-      OpenBackupEngine();
-      if (i >= 3) {  // test purge old backups
-        // when i == 4, purge to only 1 backup
-        // when i == 3, purge to 2 backups
-        ASSERT_OK(backup_engine_->PurgeOldBackups(5 - i));
-      }
-      // ---- make sure the data is there ---
-      AssertBackupConsistency(0, 0, fill_up_to, max_key);
-      CloseBackupEngine();
-    }
-  }
-}
-
-// open DB, write, backup, write, backup, close, restore
-TEST_F(BackupableDBTest, OnlineIntegrationTest) {
-  // has to be a big number, so that it triggers the memtable flush
-  const int keys_iteration = 5000;
-  const int max_key = keys_iteration * 4 + 10;
-  Random rnd(7);
-  // delete old data
-  DestroyDB(dbname_, Options());
-
-  OpenDBAndBackupEngine(true);
-  // write some data, backup, repeat
-  for (int i = 0; i < 5; ++i) {
-    if (i == 4) {
-      // delete backup number 2, online delete!
-      ASSERT_OK(backup_engine_->DeleteBackup(2));
-    }
-    // in last iteration, put smaller amount of data,
-    // so that backups can share sst files
-    int fill_up_to = std::min(keys_iteration * (i + 1), max_key);
-    FillDB(db_.get(), keys_iteration * i, fill_up_to);
-    // we should get consistent results with flush_before_backup
-    // set to both true and false
-    ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), !!(rnd.Next() % 2)));
-  }
-  // close and destroy
-  CloseDBAndBackupEngine();
-  DestroyDB(dbname_, Options());
-
-  // ---- make sure it's empty ----
-  DB* db = OpenDB();
-  AssertEmpty(db, 0, max_key);
-  delete db;
-
-  // ---- restore every backup and verify all the data is there ----
-  OpenBackupEngine();
-  for (int i = 1; i <= 5; ++i) {
-    if (i == 2) {
-      // we deleted backup 2
-      Status s = backup_engine_->RestoreDBFromBackup(2, dbname_, dbname_);
-      ASSERT_TRUE(!s.ok());
-    } else {
-      int fill_up_to = std::min(keys_iteration * i, max_key);
-      AssertBackupConsistency(i, 0, fill_up_to, max_key);
-    }
-  }
-
-  // delete some backups -- this should leave only backups 3 and 5 alive
-  ASSERT_OK(backup_engine_->DeleteBackup(4));
-  ASSERT_OK(backup_engine_->PurgeOldBackups(2));
-
-  std::vector<BackupInfo> backup_info;
-  backup_engine_->GetBackupInfo(&backup_info);
-  ASSERT_EQ(2UL, backup_info.size());
-
-  // check backup 3
-  AssertBackupConsistency(3, 0, 3 * keys_iteration, max_key);
-  // check backup 5
-  AssertBackupConsistency(5, 0, max_key);
-
-  CloseBackupEngine();
 }
 
 TEST_F(BackupableDBTest, FailOverwritingBackups) {
@@ -1019,7 +1064,7 @@ TEST_F(BackupableDBTest, NoShareTableFiles) {
 // Verify that you can backup and restore with share_files_with_checksum on
 TEST_F(BackupableDBTest, ShareTableFilesWithChecksums) {
   const int keys_iteration = 5000;
-  OpenDBAndBackupEngine(true, false, true, true);
+  OpenDBAndBackupEngineShareWithChecksum(true, false, true, true);
   for (int i = 0; i < 5; ++i) {
     FillDB(db_.get(), keys_iteration * i, keys_iteration * (i + 1));
     ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), !!(i % 2)));
@@ -1037,7 +1082,7 @@ TEST_F(BackupableDBTest, ShareTableFilesWithChecksums) {
 TEST_F(BackupableDBTest, ShareTableFilesWithChecksumsTransition) {
   const int keys_iteration = 5000;
   // set share_files_with_checksum to false
-  OpenDBAndBackupEngine(true, false, true, false);
+  OpenDBAndBackupEngineShareWithChecksum(true, false, true, false);
   for (int i = 0; i < 5; ++i) {
     FillDB(db_.get(), keys_iteration * i, keys_iteration * (i + 1));
     ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), true));
@@ -1050,7 +1095,7 @@ TEST_F(BackupableDBTest, ShareTableFilesWithChecksumsTransition) {
   }
 
   // set share_files_with_checksum to true and do some more backups
-  OpenDBAndBackupEngine(true, false, true, true);
+  OpenDBAndBackupEngineShareWithChecksum(true, false, true, true);
   for (int i = 5; i < 10; ++i) {
     FillDB(db_.get(), keys_iteration * i, keys_iteration * (i + 1));
     ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), true));
@@ -1251,6 +1296,56 @@ TEST_F(BackupableDBTest, EnvFailures) {
                                  &backup_engine));
     delete backup_engine;
   }
+}
+
+// Verify manifest can roll while a backup is being created with the old
+// manifest.
+TEST_F(BackupableDBTest, ChangeManifestDuringBackupCreation) {
+  DestroyDB(dbname_, Options());
+  options_.max_manifest_file_size = 0;  // always rollover manifest for file add
+  OpenDBAndBackupEngine(true);
+  FillDB(db_.get(), 0, 100);
+
+  rocksdb::SyncPoint::GetInstance()->LoadDependency({
+      {"BackupEngineImpl::CreateNewBackup:SavedLiveFiles1",
+       "VersionSet::LogAndApply:WriteManifest"},
+      {"VersionSet::LogAndApply:WriteManifestDone",
+       "BackupEngineImpl::CreateNewBackup:SavedLiveFiles2"},
+  });
+  rocksdb::SyncPoint::GetInstance()->EnableProcessing();
+
+  std::thread flush_thread{[this]() { ASSERT_OK(db_->Flush(FlushOptions())); }};
+
+  ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), false));
+
+  flush_thread.join();
+  rocksdb::SyncPoint::GetInstance()->DisableProcessing();
+
+  // The last manifest roll would've already been cleaned up by the full scan
+  // that happens when CreateNewBackup invokes EnableFileDeletions. We need to
+  // trigger another roll to verify non-full scan purges stale manifests.
+  DBImpl* db_impl = reinterpret_cast<DBImpl*>(db_.get());
+  std::string prev_manifest_path =
+      DescriptorFileName(dbname_, db_impl->TEST_Current_Manifest_FileNo());
+  FillDB(db_.get(), 0, 100);
+  ASSERT_OK(env_->FileExists(prev_manifest_path));
+  ASSERT_OK(db_->Flush(FlushOptions()));
+  ASSERT_TRUE(env_->FileExists(prev_manifest_path).IsNotFound());
+
+  CloseDBAndBackupEngine();
+  DestroyDB(dbname_, Options());
+  AssertBackupConsistency(0, 0, 100);
+}
+
+// see https://github.com/facebook/rocksdb/issues/921
+TEST_F(BackupableDBTest, Issue921Test) {
+  BackupEngine* backup_engine;
+  backupable_options_->share_table_files = false;
+  backupable_options_->backup_dir += "/new_dir";
+
+  ASSERT_OK(BackupEngine::Open(env_, *backupable_options_, &backup_engine));
+
+  delete backup_engine;
 }
 
 }  // anon namespace

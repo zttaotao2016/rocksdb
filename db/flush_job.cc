@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -62,6 +62,7 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
                    InstrumentedMutex* db_mutex,
                    std::atomic<bool>* shutting_down,
                    std::vector<SequenceNumber> existing_snapshots,
+                   SequenceNumber earliest_write_conflict_snapshot,
                    JobContext* job_context, LogBuffer* log_buffer,
                    Directory* db_directory, Directory* output_file_directory,
                    CompressionType output_compression, Statistics* stats,
@@ -75,6 +76,7 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
       db_mutex_(db_mutex),
       shutting_down_(shutting_down),
       existing_snapshots_(std::move(existing_snapshots)),
+      earliest_write_conflict_snapshot_(earliest_write_conflict_snapshot),
       job_context_(job_context),
       log_buffer_(log_buffer),
       db_directory_(db_directory),
@@ -92,7 +94,8 @@ FlushJob::~FlushJob() {
 }
 
 void FlushJob::ReportStartedFlush() {
-  ThreadStatusUtil::SetColumnFamily(cfd_);
+  ThreadStatusUtil::SetColumnFamily(cfd_, cfd_->ioptions()->env,
+                                    cfd_->options()->enable_thread_tracking);
   ThreadStatusUtil::SetThreadOperation(ThreadStatus::OP_FLUSH);
   ThreadStatusUtil::SetThreadOperationProperty(
       ThreadStatus::COMPACTION_JOB_ID,
@@ -235,8 +238,8 @@ Status FlushJob::WriteLevel0Table(const autovector<MemTable*>& mems,
                      cfd_->table_cache(), iter.get(), meta,
                      cfd_->internal_comparator(),
                      cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
-                     existing_snapshots_, output_compression_,
-                     cfd_->ioptions()->compression_opts,
+                     existing_snapshots_, earliest_write_conflict_snapshot_,
+                     output_compression_, cfd_->ioptions()->compression_opts,
                      mutable_cf_options_.paranoid_file_checks,
                      cfd_->internal_stats(), Env::IO_HIGH, &table_properties_);
       info.table_properties = table_properties_;
@@ -268,6 +271,7 @@ Status FlushJob::WriteLevel0Table(const autovector<MemTable*>& mems,
     if (!db_options_.disableDataSync && output_file_directory_ != nullptr) {
       output_file_directory_->Fsync();
     }
+    TEST_SYNC_POINT("FlushJob::WriteLevel0Table");
     db_mutex_->Lock();
   }
   base->Unref();

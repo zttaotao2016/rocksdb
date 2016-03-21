@@ -1,17 +1,17 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 //
-#include "rocksdb/memtablerep.h"
+#include "db/inlineskiplist.h"
 #include "db/memtable.h"
-#include "db/skiplist.h"
+#include "rocksdb/memtablerep.h"
 #include "util/arena.h"
 
 namespace rocksdb {
 namespace {
 class SkipListRep : public MemTableRep {
-  SkipList<const char*, const MemTableRep::KeyComparator&> skip_list_;
+  InlineSkipList<const MemTableRep::KeyComparator&> skip_list_;
   const MemTableRep::KeyComparator& cmp_;
   const SliceTransform* transform_;
   const size_t lookahead_;
@@ -25,10 +25,19 @@ public:
       transform_(transform), lookahead_(lookahead) {
   }
 
+  virtual KeyHandle Allocate(const size_t len, char** buf) override {
+    *buf = skip_list_.AllocateKey(len);
+    return static_cast<KeyHandle>(*buf);
+  }
+
   // Insert key into the list.
   // REQUIRES: nothing that compares equal to key is currently in the list.
   virtual void Insert(KeyHandle handle) override {
     skip_list_.Insert(static_cast<char*>(handle));
+  }
+
+  virtual void InsertConcurrently(KeyHandle handle) override {
+    skip_list_.InsertConcurrently(static_cast<char*>(handle));
   }
 
   // Returns true iff an entry that compares equal to key is in the list.
@@ -65,13 +74,14 @@ public:
 
   // Iteration over the contents of a skip list
   class Iterator : public MemTableRep::Iterator {
-    SkipList<const char*, const MemTableRep::KeyComparator&>::Iterator iter_;
+    InlineSkipList<const MemTableRep::KeyComparator&>::Iterator iter_;
+
    public:
     // Initialize an iterator over the specified list.
     // The returned iterator is not valid.
     explicit Iterator(
-      const SkipList<const char*, const MemTableRep::KeyComparator&>* list
-    ) : iter_(list) { }
+        const InlineSkipList<const MemTableRep::KeyComparator&>* list)
+        : iter_(list) {}
 
     virtual ~Iterator() override { }
 
@@ -213,8 +223,8 @@ public:
 
    private:
     const SkipListRep& rep_;
-    SkipList<const char*, const MemTableRep::KeyComparator&>::Iterator iter_;
-    SkipList<const char*, const MemTableRep::KeyComparator&>::Iterator prev_;
+    InlineSkipList<const MemTableRep::KeyComparator&>::Iterator iter_;
+    InlineSkipList<const MemTableRep::KeyComparator&>::Iterator prev_;
   };
 
   virtual MemTableRep::Iterator* GetIterator(Arena* arena = nullptr) override {

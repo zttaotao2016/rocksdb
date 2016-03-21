@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+// Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -19,6 +19,7 @@
 #endif
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
@@ -27,7 +28,6 @@
 #include <vector>
 
 #include "db/db_impl.h"
-#include "db/db_test_util.h"
 #include "db/dbformat.h"
 #include "db/filename.h"
 #include "memtable/hash_linklist_rep.h"
@@ -117,6 +117,84 @@ struct OptionsOverride {
 };
 
 }  // namespace anon
+
+// A hacky skip list mem table that triggers flush after number of entries.
+class SpecialMemTableRep : public MemTableRep {
+ public:
+  explicit SpecialMemTableRep(MemTableAllocator* allocator,
+                              MemTableRep* memtable, int num_entries_flush)
+      : MemTableRep(allocator),
+        memtable_(memtable),
+        num_entries_flush_(num_entries_flush),
+        num_entries_(0) {}
+
+  virtual KeyHandle Allocate(const size_t len, char** buf) override {
+    return memtable_->Allocate(len, buf);
+  }
+
+  // Insert key into the list.
+  // REQUIRES: nothing that compares equal to key is currently in the list.
+  virtual void Insert(KeyHandle handle) override {
+    memtable_->Insert(handle);
+    num_entries_++;
+  }
+
+  // Returns true iff an entry that compares equal to key is in the list.
+  virtual bool Contains(const char* key) const override {
+    return memtable_->Contains(key);
+  }
+
+  virtual size_t ApproximateMemoryUsage() override {
+    // Return a high memory usage when number of entries exceeds the threshold
+    // to trigger a flush.
+    return (num_entries_ < num_entries_flush_) ? 0 : 1024 * 1024 * 1024;
+  }
+
+  virtual void Get(const LookupKey& k, void* callback_args,
+                   bool (*callback_func)(void* arg,
+                                         const char* entry)) override {
+    memtable_->Get(k, callback_args, callback_func);
+  }
+
+  uint64_t ApproximateNumEntries(const Slice& start_ikey,
+                                 const Slice& end_ikey) override {
+    return memtable_->ApproximateNumEntries(start_ikey, end_ikey);
+  }
+
+  virtual MemTableRep::Iterator* GetIterator(Arena* arena = nullptr) override {
+    return memtable_->GetIterator(arena);
+  }
+
+  virtual ~SpecialMemTableRep() override {}
+
+ private:
+  unique_ptr<MemTableRep> memtable_;
+  int num_entries_flush_;
+  int num_entries_;
+};
+
+// The factory for the hacky skip list mem table that triggers flush after
+// number of entries exceeds a threshold.
+class SpecialSkipListFactory : public MemTableRepFactory {
+ public:
+  // After number of inserts exceeds `num_entries_flush` in a mem table, trigger
+  // flush.
+  explicit SpecialSkipListFactory(int num_entries_flush)
+      : num_entries_flush_(num_entries_flush) {}
+
+  virtual MemTableRep* CreateMemTableRep(
+      const MemTableRep::KeyComparator& compare, MemTableAllocator* allocator,
+      const SliceTransform* transform, Logger* logger) override {
+    return new SpecialMemTableRep(
+        allocator, factory_.CreateMemTableRep(compare, allocator, transform, 0),
+        num_entries_flush_);
+  }
+  virtual const char* Name() const override { return "SkipListFactory"; }
+
+ private:
+  SkipListFactory factory_;
+  int num_entries_flush_;
+};
 
 // Special Env used to delay background operations
 class SpecialEnv : public EnvWrapper {
@@ -447,9 +525,11 @@ class DBTestBase : public testing::Test {
     kOptimizeFiltersForHits = 27,
     kRowCache = 28,
     kRecycleLogFiles = 29,
-    kLevelSubcompactions = 30,
-    kUniversalSubcompactions = 31,
-    kEnd = 30
+    kConcurrentSkipList = 30,
+    kEnd = 31,
+    kLevelSubcompactions = 31,
+    kUniversalSubcompactions = 32,
+    kBlockBasedTableWithIndexRestartInterval = 33,
   };
   int option_config_;
 
@@ -494,6 +574,8 @@ class DBTestBase : public testing::Test {
     snprintf(buf, sizeof(buf), "key%06d", i);
     return std::string(buf);
   }
+
+  static bool ShouldSkipOptions(int option_config, int skip_mask = kNoSkip);
 
   // Switch to a fresh database with the next option configuration to
   // test.  Return false if there are no more configurations to test.
@@ -583,7 +665,7 @@ class DBTestBase : public testing::Test {
 
   uint64_t SizeAtLevel(int level);
 
-  int TotalLiveFiles(int cf = 0);
+  size_t TotalLiveFiles(int cf = 0);
 
   size_t CountLiveFiles();
 #endif  // ROCKSDB_LITE
@@ -631,6 +713,9 @@ class DBTestBase : public testing::Test {
 
   void GenerateNewFile(int fd, Random* rnd, int* key_idx, bool nowait = false);
 
+  static const int kNumKeysByGenerateNewRandomFile;
+  static const int KNumKeysByGenerateNewFile = 100;
+
   void GenerateNewRandomFile(Random* rnd, bool nowait = false);
 
   std::string IterStatus(Iterator* iter);
@@ -668,6 +753,9 @@ class DBTestBase : public testing::Test {
 
   void CopyFile(const std::string& source, const std::string& destination,
                 uint64_t size = 0);
+
+  std::unordered_map<std::string, uint64_t> GetAllSSTFiles(
+      uint64_t* total_size = nullptr);
 };
 
 }  // namespace rocksdb

@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -40,11 +40,6 @@
 
 #ifndef strcasecmp
 #define strcasecmp _stricmp
-#endif
-
-// defined in stdio.h
-#ifndef snprintf
-#define snprintf _snprintf
 #endif
 
 #undef GetCurrentTime
@@ -107,6 +102,9 @@ const uint64_t kMaxUint64 = std::numeric_limits<uint64_t>::max();
 const size_t kMaxSizet = std::numeric_limits<size_t>::max();
 
 #else //_MSC_VER
+
+// VS 15 has snprintf
+#define snprintf _snprintf
 
 #define ROCKSDB_NOEXCEPT
 // std::numeric_limits<size_t>::max() is not constexpr just yet
@@ -245,12 +243,14 @@ extern void InitOnce(OnceType* once, void (*initializer)());
 
 #define CACHE_LINE_SIZE 64U
 
-#ifdef min
-#undef min
+static inline void AsmVolatilePause() {
+#if defined(_M_IX86) || defined(_M_X64)
+  YieldProcessor();
 #endif
-#ifdef max
-#undef max
-#endif
+  // it would be nice to get "wfe" on ARM here
+}
+
+extern int PhysicalCoreID();
 
 // For Thread Local Storage abstraction
 typedef DWORD pthread_key_t;

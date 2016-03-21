@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -46,7 +46,7 @@ void Compaction::GetBoundaryKeys(
     Slice* largest_user_key) {
   bool initialized = false;
   const Comparator* ucmp = vstorage->InternalComparator()->user_comparator();
-  for (uint32_t i = 0; i < inputs.size(); ++i) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
     if (inputs[i].files.empty()) {
       continue;
     }
@@ -128,8 +128,8 @@ bool Compaction::TEST_IsBottommostLevel(
 bool Compaction::IsFullCompaction(
     VersionStorageInfo* vstorage,
     const std::vector<CompactionInputFiles>& inputs) {
-  int num_files_in_compaction = 0;
-  int total_num_files = 0;
+  size_t num_files_in_compaction = 0;
+  size_t total_num_files = 0;
   for (int l = 0; l < vstorage->num_levels(); l++) {
     total_num_files += vstorage->NumLevelFiles(l);
   }
@@ -147,7 +147,8 @@ Compaction::Compaction(VersionStorageInfo* vstorage,
                        uint32_t _output_path_id, CompressionType _compression,
                        std::vector<FileMetaData*> _grandparents,
                        bool _manual_compaction, double _score,
-                       bool _deletion_compaction)
+                       bool _deletion_compaction,
+                       CompactionReason _compaction_reason)
     : start_level_(_inputs[0].level),
       output_level_(_output_level),
       max_output_file_size_(_target_file_size),
@@ -167,8 +168,12 @@ Compaction::Compaction(VersionStorageInfo* vstorage,
       score_(_score),
       bottommost_level_(IsBottommostLevel(output_level_, vstorage, inputs_)),
       is_full_compaction_(IsFullCompaction(vstorage, inputs_)),
-      is_manual_compaction_(_manual_compaction) {
+      is_manual_compaction_(_manual_compaction),
+      compaction_reason_(_compaction_reason) {
   MarkFilesBeingCompacted(true);
+  if (is_manual_compaction_) {
+    compaction_reason_ = CompactionReason::kManualCompaction;
+  }
 
 #ifndef NDEBUG
   for (size_t i = 1; i < inputs_.size(); ++i) {
@@ -184,6 +189,9 @@ Compaction::Compaction(VersionStorageInfo* vstorage,
                                 &arena_);
     }
   }
+
+  Slice smallest_user_key;
+  GetBoundaryKeys(vstorage, inputs_, &smallest_user_key, &largest_user_key_);
 }
 
 Compaction::~Compaction() {
@@ -311,7 +319,7 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
 // Mark (or clear) each file that is being compacted
 void Compaction::MarkFilesBeingCompacted(bool mark_as_compacted) {
   for (size_t i = 0; i < num_input_levels(); i++) {
-    for (unsigned int j = 0; j < inputs_[i].size(); j++) {
+    for (size_t j = 0; j < inputs_[i].size(); j++) {
       assert(mark_as_compacted ? !inputs_[i][j]->being_compacted :
                                   inputs_[i][j]->being_compacted);
       inputs_[i][j]->being_compacted = mark_as_compacted;
@@ -371,7 +379,7 @@ int InputSummary(const std::vector<FileMetaData*>& files, char* output,
                  int len) {
   *output = '\0';
   int write = 0;
-  for (unsigned int i = 0; i < files.size(); i++) {
+  for (size_t i = 0; i < files.size(); i++) {
     int sz = len - write;
     int ret;
     char sztxt[16];
@@ -428,7 +436,7 @@ uint64_t Compaction::OutputFilePreallocationSize() {
   }
   // Over-estimate slightly so we don't end up just barely crossing
   // the threshold
-  return preallocation_size * 1.1;
+  return preallocation_size + (preallocation_size / 10);
 }
 
 std::unique_ptr<CompactionFilter> Compaction::CreateCompactionFilter() const {

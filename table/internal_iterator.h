@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+// Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <string>
 #include "rocksdb/iterator.h"
 #include "rocksdb/status.h"
 
@@ -59,6 +60,28 @@ class InternalIterator : public Cleanable {
   // If non-blocking IO is requested and this operation cannot be
   // satisfied without doing some IO, then this returns Status::Incomplete().
   virtual Status status() const = 0;
+
+  // Make sure that all current and future data blocks used by this iterator
+  // will be pinned in memory and will not be released except when
+  // ReleasePinnedData() is called or the iterator is deleted.
+  virtual Status PinData() { return Status::NotSupported(""); }
+
+  // Release all blocks that were pinned because of PinData() and no future
+  // blocks will be pinned.
+  virtual Status ReleasePinnedData() { return Status::NotSupported(""); }
+
+  // If true, this means that the Slice returned by key() is valid as long
+  // as the iterator is not deleted and ReleasePinnedData() is not called.
+  //
+  // IsKeyPinned() is guaranteed to always return true if
+  //  - PinData() is called
+  //  - DB tables were created with BlockBasedTableOptions::use_delta_encoding
+  //    set to false.
+  virtual bool IsKeyPinned() const { return false; }
+
+  virtual Status GetProperty(std::string prop_name, std::string* prop) {
+    return Status::NotSupported("");
+  }
 
  private:
   // No copying allowed

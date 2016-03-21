@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -88,7 +88,7 @@ Status TableCache::GetTableReader(
     const EnvOptions& env_options,
     const InternalKeyComparator& internal_comparator, const FileDescriptor& fd,
     bool sequential_mode, bool record_read_stats, HistogramImpl* file_read_hist,
-    unique_ptr<TableReader>* table_reader) {
+    unique_ptr<TableReader>* table_reader, bool skip_filters) {
   std::string fname =
       TableFileName(ioptions_.db_paths, fd.GetNumber(), fd.GetPathId());
   unique_ptr<RandomAccessFile> file;
@@ -108,7 +108,8 @@ Status TableCache::GetTableReader(
                                    ioptions_.statistics, record_read_stats,
                                    file_read_hist));
     s = ioptions_.table_factory->NewTableReader(
-        TableReaderOptions(ioptions_, env_options, internal_comparator),
+        TableReaderOptions(ioptions_, env_options, internal_comparator,
+                           skip_filters),
         std::move(file_reader), fd.GetFileSize(), table_reader);
     TEST_SYNC_POINT("TableCache::GetTableReader:0");
   }
@@ -119,7 +120,7 @@ Status TableCache::FindTable(const EnvOptions& env_options,
                              const InternalKeyComparator& internal_comparator,
                              const FileDescriptor& fd, Cache::Handle** handle,
                              const bool no_io, bool record_read_stats,
-                             HistogramImpl* file_read_hist) {
+                             HistogramImpl* file_read_hist, bool skip_filters) {
   PERF_TIMER_GUARD(find_table_nanos);
   Status s;
   uint64_t number = fd.GetNumber();
@@ -135,15 +136,19 @@ Status TableCache::FindTable(const EnvOptions& env_options,
     unique_ptr<TableReader> table_reader;
     s = GetTableReader(env_options, internal_comparator, fd,
                        false /* sequential mode */, record_read_stats,
-                       file_read_hist, &table_reader);
+                       file_read_hist, &table_reader, skip_filters);
     if (!s.ok()) {
       assert(table_reader == nullptr);
       RecordTick(ioptions_.statistics, NO_FILE_ERRORS);
       // We do not cache error results so that if the error is transient,
       // or somebody repairs the file, we recover automatically.
     } else {
-      *handle = cache_->Insert(key, table_reader.release(), 1,
-                               &DeleteEntry<TableReader>);
+      s = cache_->Insert(key, table_reader.get(), 1, &DeleteEntry<TableReader>,
+                         handle);
+      if (s.ok()) {
+        // Release ownership of table reader.
+        table_reader.release();
+      }
     }
   }
   return s;
@@ -153,7 +158,7 @@ InternalIterator* TableCache::NewIterator(
     const ReadOptions& options, const EnvOptions& env_options,
     const InternalKeyComparator& icomparator, const FileDescriptor& fd,
     TableReader** table_reader_ptr, HistogramImpl* file_read_hist,
-    bool for_compaction, Arena* arena) {
+    bool for_compaction, Arena* arena, bool skip_filters) {
   PERF_TIMER_GUARD(new_table_iterator_nanos);
 
   if (table_reader_ptr != nullptr) {
@@ -176,10 +181,10 @@ InternalIterator* TableCache::NewIterator(
   } else {
     table_reader = fd.table_reader;
     if (table_reader == nullptr) {
-      Status s =
-          FindTable(env_options, icomparator, fd, &handle,
-                    options.read_tier == kBlockCacheTier /* no_io */,
-                    !for_compaction /* record read_stats */, file_read_hist);
+      Status s = FindTable(env_options, icomparator, fd, &handle,
+                           options.read_tier == kBlockCacheTier /* no_io */,
+                           !for_compaction /* record read_stats */,
+                           file_read_hist, skip_filters);
       if (!s.ok()) {
         return NewErrorInternalIterator(s, arena);
       }
@@ -187,7 +192,8 @@ InternalIterator* TableCache::NewIterator(
     }
   }
 
-  InternalIterator* result = table_reader->NewIterator(options, arena);
+  InternalIterator* result =
+      table_reader->NewIterator(options, arena, skip_filters);
 
   if (create_new_table_reader) {
     assert(handle == nullptr);
@@ -209,7 +215,8 @@ InternalIterator* TableCache::NewIterator(
 Status TableCache::Get(const ReadOptions& options,
                        const InternalKeyComparator& internal_comparator,
                        const FileDescriptor& fd, const Slice& k,
-                       GetContext* get_context, HistogramImpl* file_read_hist) {
+                       GetContext* get_context, HistogramImpl* file_read_hist,
+                       bool skip_filters) {
   TableReader* t = fd.table_reader;
   Status s;
   Cache::Handle* handle = nullptr;
@@ -219,7 +226,9 @@ Status TableCache::Get(const ReadOptions& options,
   IterKey row_cache_key;
   std::string row_cache_entry_buffer;
 
-  if (ioptions_.row_cache) {
+  // Check row cache if enabled. Since row cache does not currently store
+  // sequence numbers, we cannot use it if we need to fetch the sequence.
+  if (ioptions_.row_cache && !get_context->NeedToReadSequence()) {
     uint64_t fd_number = fd.GetNumber();
     auto user_key = ExtractUserKey(k);
     // We use the user key as cache key instead of the internal key,
@@ -256,19 +265,19 @@ Status TableCache::Get(const ReadOptions& options,
   if (!t) {
     s = FindTable(env_options_, internal_comparator, fd, &handle,
                   options.read_tier == kBlockCacheTier /* no_io */,
-                  true /* record_read_stats */, file_read_hist);
+                  true /* record_read_stats */, file_read_hist, skip_filters);
     if (s.ok()) {
       t = GetTableReaderFromHandle(handle);
     }
   }
   if (s.ok()) {
     get_context->SetReplayLog(row_cache_entry);  // nullptr if no cache.
-    s = t->Get(options, k, get_context);
+    s = t->Get(options, k, get_context, skip_filters);
     get_context->SetReplayLog(nullptr);
     if (handle != nullptr) {
       ReleaseHandle(handle);
     }
-  } else if (options.read_tier && s.IsIncomplete()) {
+  } else if (options.read_tier == kBlockCacheTier && s.IsIncomplete()) {
     // Couldn't find Table in cache but treat as kFound if no_io set
     get_context->MarkKeyMayExist();
     return Status::OK();
@@ -280,9 +289,8 @@ Status TableCache::Get(const ReadOptions& options,
     size_t charge =
         row_cache_key.Size() + row_cache_entry->size() + sizeof(std::string);
     void* row_ptr = new std::string(std::move(*row_cache_entry));
-    auto row_handle = ioptions_.row_cache->Insert(
-        row_cache_key.GetKey(), row_ptr, charge, &DeleteEntry<std::string>);
-    ioptions_.row_cache->Release(row_handle);
+    ioptions_.row_cache->Insert(row_cache_key.GetKey(), row_ptr, charge,
+                                &DeleteEntry<std::string>);
   }
 #endif  // ROCKSDB_LITE
 

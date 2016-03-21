@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -25,16 +25,21 @@ class Slice;
 class Status;
 
 struct TableReaderOptions {
+  // @param skip_filters Disables loading/accessing the filter block
   TableReaderOptions(const ImmutableCFOptions& _ioptions,
                      const EnvOptions& _env_options,
-                     const InternalKeyComparator& _internal_comparator)
+                     const InternalKeyComparator& _internal_comparator,
+                     bool _skip_filters = false)
       : ioptions(_ioptions),
         env_options(_env_options),
-        internal_comparator(_internal_comparator) {}
+        internal_comparator(_internal_comparator),
+        skip_filters(_skip_filters) {}
 
   const ImmutableCFOptions& ioptions;
   const EnvOptions& env_options;
   const InternalKeyComparator& internal_comparator;
+  // This is only used for BlockBasedTable (reader)
+  bool skip_filters;
 };
 
 struct TableBuilderOptions {
@@ -57,6 +62,7 @@ struct TableBuilderOptions {
       int_tbl_prop_collector_factories;
   CompressionType compression_type;
   const CompressionOptions& compression_opts;
+  // This is only used for BlockBasedTableBuilder
   bool skip_filters = false;
 };
 

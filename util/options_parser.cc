@@ -1,4 +1,4 @@
-// Copyright (c) 2014, Facebook, Inc.  All rights reserved.
+// Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -17,6 +17,7 @@
 #include "rocksdb/db.h"
 #include "util/options_helper.h"
 #include "util/string_util.h"
+#include "util/sync_point.h"
 
 #include "port/port.h"
 
@@ -34,6 +35,7 @@ Status PersistRocksDBOptions(const DBOptions& db_opt,
                              const std::vector<std::string>& cf_names,
                              const std::vector<ColumnFamilyOptions>& cf_opts,
                              const std::string& file_name, Env* env) {
+  TEST_SYNC_POINT("PersistRocksDBOptions:start");
   if (cf_names.size() != cf_opts.size()) {
     return Status::InvalidArgument(
         "cf_names.size() and cf_opts.size() must be the same");
@@ -508,6 +510,7 @@ bool AreEqualOptions(
     const std::unordered_map<std::string, std::string>* opt_map) {
   const char* offset1 = opt1 + type_info.offset;
   const char* offset2 = opt2 + type_info.offset;
+  static const std::string kNullptrString = "nullptr";
   switch (type_info.type) {
     case OptionType::kBoolean:
       return (*reinterpret_cast<const bool*>(offset1) ==
@@ -554,8 +557,18 @@ bool AreEqualOptions(
           *reinterpret_cast<const BlockBasedTableOptions::IndexType*>(
               offset1) ==
           *reinterpret_cast<const BlockBasedTableOptions::IndexType*>(offset2));
+    case OptionType::kWALRecoveryMode:
+      return (*reinterpret_cast<const WALRecoveryMode*>(offset1) ==
+              *reinterpret_cast<const WALRecoveryMode*>(offset2));
+    case OptionType::kAccessHint:
+      return (*reinterpret_cast<const DBOptions::AccessHint*>(offset1) ==
+              *reinterpret_cast<const DBOptions::AccessHint*>(offset2));
+    case OptionType::kInfoLogLevel:
+      return (*reinterpret_cast<const InfoLogLevel*>(offset1) ==
+              *reinterpret_cast<const InfoLogLevel*>(offset2));
     default:
-      if (type_info.verification == OptionVerificationType::kByName) {
+      if (type_info.verification == OptionVerificationType::kByName ||
+          type_info.verification == OptionVerificationType::kByNameAllowNull) {
         std::string value1;
         bool result =
             SerializeSingleOptionHelper(offset1, type_info.type, &value1);
@@ -569,6 +582,12 @@ bool AreEqualOptions(
         if (iter == opt_map->end()) {
           return true;
         } else {
+          if (type_info.verification ==
+              OptionVerificationType::kByNameAllowNull) {
+            if (iter->second == kNullptrString || value1 == kNullptrString) {
+              return true;
+            }
+          }
           return (value1 == iter->second);
         }
       }

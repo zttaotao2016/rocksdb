@@ -1,6 +1,36 @@
 # Rocksdb Change Log
+## 4.6.0 (3/10/2016)
+### Public API Changes
+* Change default of BlockBasedTableOptions.format_version to 2. It means default DB created by 4.6 or up cannot be opened by RocksDB version 3.9 or earlier.
+* Added strict_capacity_limit option to NewLRUCache. If the flag is set to true, insert to cache will fail if no enough capacity can be free. Signiture of Cache::Insert() is updated accordingly.
+* Tickers [NUMBER_DB_NEXT, NUMBER_DB_PREV, NUMBER_DB_NEXT_FOUND, NUMBER_DB_PREV_FOUND, ITER_BYTES_READ] are not updated immediately. The are updated when the Iterator is deleted.  
+* Add monotonically increasing counter (DB property "rocksdb.current-super-version-number") that increments upon any change to the LSM tree.
+### New Features
+* Add CompactionPri::kMinOverlappingRatio, a compaction picking mode friendly to write amplification.
+* Deprecate Iterator::IsKeyPinned() and replace it with Iterator::GetProperty() with prop_name="rocksdb.iterator.is.key.pinned"
 
-## Unreleased
+## 4.5.0 (2/5/2016)
+### Public API Changes
+* Add a new perf context level between kEnableCount and kEnableTime. Level 2 now does not include timers for mutexes.
+* Statistics of mutex operation durations will not be measured by default. If you want to have them enabled, you need to set Statistics::stats_level_ to kAll.
+* DBOptions::delete_scheduler and NewDeleteScheduler() are removed, please use DBOptions::sst_file_manager and NewSstFileManager() instead
+
+### New Features
+* ldb tool now supports operations to non-default column families.
+* Add kPersistedTier to ReadTier.  This option allows Get and MultiGet to read only the persited data and skip mem-tables if writes were done with disableWAL = true.
+* Add DBOptions::sst_file_manager. Use NewSstFileManager() in include/rocksdb/sst_file_manager.h to create a SstFileManager that can be used to track the total size of SST files and control the SST files deletion rate.  
+
+## 4.4.0 (1/14/2016)
+### Public API Changes
+* Change names in CompactionPri and add a new one.
+* Deprecate options.soft_rate_limit and add options.soft_pending_compaction_bytes_limit.
+* If options.max_write_buffer_number > 3, writes will be slowed down when writing to the last write buffer to delay a full stop.
+* Introduce CompactionJobInfo::compaction_reason, this field include the reason to trigger the compaction.
+* After slow down is triggered, if estimated pending compaction bytes keep increasing, slowdown more.
+* Increase default options.delayed_write_rate to 2MB/s.
+* Added a new parameter --path to ldb tool. --path accepts the name of either MANIFEST, SST or a WAL file. Either --db or --path can be used when calling ldb.
+
+## 4.3.0 (12/8/2015)
 ### New Features
 * CompactionFilter has new member function called IgnoreSnapshots which allows CompactionFilter to be called even if there are snapshots later than the key.
 * RocksDB will now persist options under the same directory as the RocksDB database on successful DB::Open, CreateColumnFamily, DropColumnFamily, and SetOptions.
@@ -8,10 +38,12 @@
 * Introduce CheckOptionsCompatibility() in rocksdb/utilities/options_util.h.  This function checks whether the input set of options is able to open the specified DB successfully.
 
 ### Public API Changes
+* When options.db_write_buffer_size triggers, only the column family with the largest column family size will be flushed, not all the column families.
+
 ## 4.2.0 (11/9/2015)
 ### New Features
-* Introduce CreateLoggerFromOptions(), this function create a Logger for provided DBOptions. 
-* Add GetAggregatedIntProperty(), which returns the sum of the GetIntProperty of all the column families. 
+* Introduce CreateLoggerFromOptions(), this function create a Logger for provided DBOptions.
+* Add GetAggregatedIntProperty(), which returns the sum of the GetIntProperty of all the column families.
 * Add MemoryUtil in rocksdb/utilities/memory.h.  It currently offers a way to get the memory usage by type from a list rocksdb instances.
 
 ### Public API Changes
@@ -208,7 +240,7 @@
 * Support Multiple DB paths in universal style compactions
 * Add feature of storing plain table index and bloom filter in SST file.
 * CompactRange() will never output compacted files to level 0. This used to be the case when all the compaction input files were at level 0.
-* Added iterate_upper_bound to define the extent upto which the forward iterator will return entries. This will prevent iterating over delete markers and overwritten entries for edge cases where you want to break out the iterator anyways. This may improve perfomance in case there are a large number of delete markers or overwritten entries.
+* Added iterate_upper_bound to define the extent upto which the forward iterator will return entries. This will prevent iterating over delete markers and overwritten entries for edge cases where you want to break out the iterator anyways. This may improve performance in case there are a large number of delete markers or overwritten entries.
 
 ### Public API changes
 * DBOptions.db_paths now is a vector of a DBPath structure which indicates both of path and target size

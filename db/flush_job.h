@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -58,6 +58,7 @@ class FlushJob {
            const EnvOptions& env_options, VersionSet* versions,
            InstrumentedMutex* db_mutex, std::atomic<bool>* shutting_down,
            std::vector<SequenceNumber> existing_snapshots,
+           SequenceNumber earliest_write_conflict_snapshot,
            JobContext* job_context, LogBuffer* log_buffer,
            Directory* db_directory, Directory* output_file_directory,
            CompressionType output_compression, Statistics* stats,
@@ -83,6 +84,7 @@ class FlushJob {
   InstrumentedMutex* db_mutex_;
   std::atomic<bool>* shutting_down_;
   std::vector<SequenceNumber> existing_snapshots_;
+  SequenceNumber earliest_write_conflict_snapshot_;
   JobContext* job_context_;
   LogBuffer* log_buffer_;
   Directory* db_directory_;

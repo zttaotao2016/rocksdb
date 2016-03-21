@@ -1,4 +1,4 @@
-// Copyright (c) 2015, Facebook, Inc.  All rights reserved.
+// Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree. An additional grant
 // of patent rights can be found in the PATENTS file in the same directory.
@@ -19,6 +19,17 @@ namespace rocksdb {
 class Iterator;
 class TransactionDB;
 class WriteBatchWithIndex;
+
+// Provides notification to the caller of SetSnapshotOnNextOperation when
+// the actual snapshot gets created
+class TransactionNotifier {
+ public:
+  virtual ~TransactionNotifier() {}
+
+  // Implement this method to receive notification when a snapshot is
+  // requested via SetSnapshotOnNextOperation.
+  virtual void SnapshotCreated(const Snapshot* newSnapshot) = 0;
+};
 
 // Provides BEGIN/COMMIT/ROLLBACK transactions.
 //
@@ -69,7 +80,10 @@ class Transaction {
   // Calling SetSnapshotOnNextOperation() will not affect what snapshot is
   // returned by GetSnapshot() until the next write/GetForUpdate is executed.
   //
-  // This is an optimization to reduce the likelyhood of conflicts that
+  // When the snapshot is created the notifier's SnapshotCreated method will
+  // be called so that the caller can get access to the snapshot.
+  //
+  // This is an optimization to reduce the likelihood of conflicts that
   // could occur in between the time SetSnapshot() is called and the first
   // write/GetForUpdate operation.  Eg, this prevents the following
   // race-condition:
@@ -78,7 +92,8 @@ class Transaction {
   //                             txn2->Put("A", ...);
   //                             txn2->Commit();
   //   txn1->GetForUpdate(opts, "A", ...);  // FAIL!
-  virtual void SetSnapshotOnNextOperation() = 0;
+  virtual void SetSnapshotOnNextOperation(
+      std::shared_ptr<TransactionNotifier> notifier = nullptr) = 0;
 
   // Returns the Snapshot created by the last call to SetSnapshot().
   //
@@ -210,7 +225,7 @@ class Transaction {
   // in this transaction do not yet belong to any snapshot and will be fetched
   // regardless).
   //
-  // Caller is reponsible for deleting the returned Iterator.
+  // Caller is responsible for deleting the returned Iterator.
   //
   // The returned iterator is only valid until Commit(), Rollback(), or
   // RollbackToSavePoint() is called.
@@ -334,6 +349,34 @@ class Transaction {
   // this transaction.
   // Has no effect on OptimisticTransactions.
   virtual void SetLockTimeout(int64_t timeout) = 0;
+
+  // Return the WriteOptions that will be used during Commit()
+  virtual const WriteOptions* GetWriteOptions() = 0;
+
+  // Reset the WriteOptions that will be used during Commit().
+  virtual void SetWriteOptions(const WriteOptions& write_options) = 0;
+
+  // If this key was previously fetched in this transaction using
+  // GetForUpdate/MultigetForUpdate(), calling UndoGetForUpdate will tell
+  // the transaction that it no longer needs to do any conflict checking
+  // for this key.
+  //
+  // If a key has been fetched N times via GetForUpdate/MultigetForUpdate(),
+  // then UndoGetForUpdate will only have an effect if it is also called N
+  // times.  If this key has been written to in this transaction,
+  // UndoGetForUpdate() will have no effect.
+  //
+  // If SetSavePoint() has been called after the GetForUpdate(),
+  // UndoGetForUpdate() will not have any effect.
+  //
+  // If this Transaction was created by an OptimisticTransactionDB,
+  // calling UndoGetForUpdate can affect whether this key is conflict checked
+  // at commit time.
+  // If this Transaction was created by a TransactionDB,
+  // calling UndoGetForUpdate may release any held locks for this key.
+  virtual void UndoGetForUpdate(ColumnFamilyHandle* column_family,
+                                const Slice& key) = 0;
+  virtual void UndoGetForUpdate(const Slice& key) = 0;
 
  protected:
   explicit Transaction(const TransactionDB* db) {}

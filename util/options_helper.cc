@@ -1,4 +1,4 @@
-//  Copyright (c) 2014, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -361,6 +361,18 @@ bool ParseOptionHelper(char* opt_address, const OptionType& opt_type,
       return ParseEnum<EncodingType>(
           encoding_type_string_map, value,
           reinterpret_cast<EncodingType*>(opt_address));
+    case OptionType::kWALRecoveryMode:
+      return ParseEnum<WALRecoveryMode>(
+          wal_recovery_mode_string_map, value,
+          reinterpret_cast<WALRecoveryMode*>(opt_address));
+    case OptionType::kAccessHint:
+      return ParseEnum<DBOptions::AccessHint>(
+          access_hint_string_map, value,
+          reinterpret_cast<DBOptions::AccessHint*>(opt_address));
+    case OptionType::kInfoLogLevel:
+      return ParseEnum<InfoLogLevel>(
+          info_log_level_string_map, value,
+          reinterpret_cast<InfoLogLevel*>(opt_address));
     default:
       return false;
   }
@@ -498,6 +510,18 @@ bool SerializeSingleOptionHelper(const char* opt_address,
       return SerializeEnum<EncodingType>(
           encoding_type_string_map,
           *reinterpret_cast<const EncodingType*>(opt_address), value);
+    case OptionType::kWALRecoveryMode:
+      return SerializeEnum<WALRecoveryMode>(
+          wal_recovery_mode_string_map,
+          *reinterpret_cast<const WALRecoveryMode*>(opt_address), value);
+    case OptionType::kAccessHint:
+      return SerializeEnum<DBOptions::AccessHint>(
+          access_hint_string_map,
+          *reinterpret_cast<const DBOptions::AccessHint*>(opt_address), value);
+    case OptionType::kInfoLogLevel:
+      return SerializeEnum<InfoLogLevel>(
+          info_log_level_string_map,
+          *reinterpret_cast<const InfoLogLevel*>(opt_address), value);
     default:
       return false;
   }
@@ -539,7 +563,10 @@ bool ParseCompactionOptions(const std::string& name, const std::string& value,
   if (name == "disable_auto_compactions") {
     new_options->disable_auto_compactions = ParseBoolean(name, value);
   } else if (name == "soft_rate_limit") {
-    new_options->soft_rate_limit = ParseDouble(value);
+    // Deprecated options but still leave it here to avoid older options
+    // strings can be consumed.
+  } else if (name == "soft_pending_compaction_bytes_limit") {
+    new_options->soft_pending_compaction_bytes_limit = ParseUint64(value);
   } else if (name == "hard_pending_compaction_bytes_limit") {
     new_options->hard_pending_compaction_bytes_limit = ParseUint64(value);
   } else if (name == "hard_rate_limit") {
@@ -802,6 +829,7 @@ Status ParseColumnFamilyOption(const std::string& name,
       }
       switch (opt_info.verification) {
         case OptionVerificationType::kByName:
+        case OptionVerificationType::kByNameAllowNull:
           return Status::NotSupported(
               "Deserializing the specified CF option " + name +
                   " is not supported");
@@ -982,6 +1010,7 @@ Status ParseDBOption(const std::string& name,
       }
       switch (opt_info.verification) {
         case OptionVerificationType::kByName:
+        case OptionVerificationType::kByNameAllowNull:
           return Status::NotSupported(
               "Deserializing the specified DB option " + name +
                   " is not supported");
@@ -1079,6 +1108,8 @@ Status GetBlockBasedTableOptionsFromMap(
                                      // the old API, where everything is
                                      // parsable.
           (iter->second.verification != OptionVerificationType::kByName &&
+           iter->second.verification !=
+               OptionVerificationType::kByNameAllowNull &&
            iter->second.verification != OptionVerificationType::kDeprecated)) {
         return Status::InvalidArgument("Can't parse BlockBasedTableOptions:",
                                        o.first + " " + error_message);
@@ -1113,10 +1144,12 @@ Status GetPlainTableOptionsFromMap(
     if (error_message != "") {
       const auto iter = plain_table_type_info.find(o.first);
       if (iter == plain_table_type_info.end() ||
-          !input_strings_escaped ||// !input_strings_escaped indicates
-                                   // the old API, where everything is
-                                   // parsable.
+          !input_strings_escaped ||  // !input_strings_escaped indicates
+                                     // the old API, where everything is
+                                     // parsable.
           (iter->second.verification != OptionVerificationType::kByName &&
+           iter->second.verification !=
+               OptionVerificationType::kByNameAllowNull &&
            iter->second.verification != OptionVerificationType::kDeprecated)) {
         return Status::InvalidArgument("Can't parse PlainTableOptions:",
                                         o.first + " " + error_message);
@@ -1386,7 +1419,6 @@ ColumnFamilyOptions BuildColumnFamilyOptions(
   // Compaction related options
   cf_opts.disable_auto_compactions =
       mutable_cf_options.disable_auto_compactions;
-  cf_opts.soft_rate_limit = mutable_cf_options.soft_rate_limit;
   cf_opts.level0_file_num_compaction_trigger =
       mutable_cf_options.level0_file_num_compaction_trigger;
   cf_opts.level0_slowdown_writes_trigger =

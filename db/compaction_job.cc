@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -51,6 +51,7 @@
 #include "util/iostats_context_imp.h"
 #include "util/log_buffer.h"
 #include "util/logging.h"
+#include "util/sst_file_manager_impl.h"
 #include "util/mutexlock.h"
 #include "util/perf_context_imp.h"
 #include "util/stop_watch.h"
@@ -211,7 +212,9 @@ CompactionJob::CompactionJob(
     const EnvOptions& env_options, VersionSet* versions,
     std::atomic<bool>* shutting_down, LogBuffer* log_buffer,
     Directory* db_directory, Directory* output_directory, Statistics* stats,
+    InstrumentedMutex* db_mutex, Status* db_bg_error,
     std::vector<SequenceNumber> existing_snapshots,
+    SequenceNumber earliest_write_conflict_snapshot,
     std::shared_ptr<Cache> table_cache, EventLogger* event_logger,
     bool paranoid_file_checks, bool measure_io_stats, const std::string& dbname,
     CompactionJobStats* compaction_job_stats)
@@ -229,13 +232,18 @@ CompactionJob::CompactionJob(
       db_directory_(db_directory),
       output_directory_(output_directory),
       stats_(stats),
+      db_mutex_(db_mutex),
+      db_bg_error_(db_bg_error),
       existing_snapshots_(std::move(existing_snapshots)),
+      earliest_write_conflict_snapshot_(earliest_write_conflict_snapshot),
       table_cache_(std::move(table_cache)),
       event_logger_(event_logger),
       paranoid_file_checks_(paranoid_file_checks),
       measure_io_stats_(measure_io_stats) {
   assert(log_buffer_ != nullptr);
-  ThreadStatusUtil::SetColumnFamily(compact_->compaction->column_family_data());
+  const auto* cfd = compact_->compaction->column_family_data();
+  ThreadStatusUtil::SetColumnFamily(cfd, cfd->ioptions()->env,
+                                    cfd->options()->enable_thread_tracking);
   ThreadStatusUtil::SetThreadOperation(ThreadStatus::OP_COMPACTION);
   ReportStartedCompaction(compaction);
 }
@@ -247,8 +255,9 @@ CompactionJob::~CompactionJob() {
 
 void CompactionJob::ReportStartedCompaction(
     Compaction* compaction) {
-  ThreadStatusUtil::SetColumnFamily(
-      compact_->compaction->column_family_data());
+  const auto* cfd = compact_->compaction->column_family_data();
+  ThreadStatusUtil::SetColumnFamily(cfd, cfd->ioptions()->env,
+                                    cfd->options()->enable_thread_tracking);
 
   ThreadStatusUtil::SetThreadOperationProperty(
       ThreadStatus::COMPACTION_JOB_ID,
@@ -332,11 +341,6 @@ struct RangeWithSize {
       : range(a, b), size(s) {}
 };
 
-bool SliceCompare(const Comparator* cmp, const Slice& a, const Slice& b) {
-  // Returns true if a < b
-  return cmp->Compare(ExtractUserKey(a), ExtractUserKey(b)) < 0;
-}
-
 // Generates a histogram representing potential divisions of key ranges from
 // the input. It adds the starting and/or ending keys of certain input files
 // to the working set and then finds the approximate size of data in between
@@ -345,14 +349,13 @@ bool SliceCompare(const Comparator* cmp, const Slice& a, const Slice& b) {
 void CompactionJob::GenSubcompactionBoundaries() {
   auto* c = compact_->compaction;
   auto* cfd = c->column_family_data();
-  std::set<Slice, std::function<bool(const Slice& a, const Slice& b)> > bounds(
-      std::bind(&SliceCompare, cfd->user_comparator(), std::placeholders::_1,
-                std::placeholders::_2));
+  const Comparator* cfd_comparator = cfd->user_comparator();
+  std::vector<Slice> bounds;
   int start_lvl = c->start_level();
   int out_lvl = c->output_level();
 
   // Add the starting and/or ending key of certain input files as a potential
-  // boundary (because we're inserting into a set, it avoids duplicates)
+  // boundary
   for (size_t lvl_idx = 0; lvl_idx < c->num_input_levels(); lvl_idx++) {
     int lvl = c->level(lvl_idx);
     if (lvl >= start_lvl && lvl <= out_lvl) {
@@ -360,33 +363,43 @@ void CompactionJob::GenSubcompactionBoundaries() {
       size_t num_files = flevel->num_files;
 
       if (num_files == 0) {
-        break;
+        continue;
       }
 
       if (lvl == 0) {
         // For level 0 add the starting and ending key of each file since the
         // files may have greatly differing key ranges (not range-partitioned)
         for (size_t i = 0; i < num_files; i++) {
-          bounds.emplace(flevel->files[i].smallest_key);
-          bounds.emplace(flevel->files[i].largest_key);
+          bounds.emplace_back(flevel->files[i].smallest_key);
+          bounds.emplace_back(flevel->files[i].largest_key);
         }
       } else {
         // For all other levels add the smallest/largest key in the level to
         // encompass the range covered by that level
-        bounds.emplace(flevel->files[0].smallest_key);
-        bounds.emplace(flevel->files[num_files - 1].largest_key);
+        bounds.emplace_back(flevel->files[0].smallest_key);
+        bounds.emplace_back(flevel->files[num_files - 1].largest_key);
         if (lvl == out_lvl) {
           // For the last level include the starting keys of all files since
           // the last level is the largest and probably has the widest key
           // range. Since it's range partitioned, the ending key of one file
           // and the starting key of the next are very close (or identical).
           for (size_t i = 1; i < num_files; i++) {
-            bounds.emplace(flevel->files[i].smallest_key);
+            bounds.emplace_back(flevel->files[i].smallest_key);
           }
         }
       }
     }
   }
+
+  std::sort(bounds.begin(), bounds.end(),
+    [cfd_comparator] (const Slice& a, const Slice& b) -> bool {
+      return cfd_comparator->Compare(ExtractUserKey(a), ExtractUserKey(b)) < 0;
+    });
+  // Remove duplicated entries from bounds
+  bounds.erase(std::unique(bounds.begin(), bounds.end(),
+    [cfd_comparator] (const Slice& a, const Slice& b) -> bool {
+      return cfd_comparator->Compare(ExtractUserKey(a), ExtractUserKey(b)) == 0;
+    }), bounds.end());
 
   // Combine consecutive pairs of boundaries into ranges with an approximate
   // size of data covered by keys in that range
@@ -409,9 +422,9 @@ void CompactionJob::GenSubcompactionBoundaries() {
 
   // Group the ranges into subcompactions
   const double min_file_fill_percent = 4.0 / 5;
-  uint64_t max_output_files = std::ceil(
+  uint64_t max_output_files = static_cast<uint64_t>(std::ceil(
       sum / min_file_fill_percent /
-      cfd->GetCurrentMutableCFOptions()->MaxFileSizeForLevel(out_lvl));
+      cfd->GetCurrentMutableCFOptions()->MaxFileSizeForLevel(out_lvl)));
   uint64_t subcompactions =
       std::min({static_cast<uint64_t>(ranges.size()),
                 static_cast<uint64_t>(db_options_.max_subcompactions),
@@ -424,12 +437,12 @@ void CompactionJob::GenSubcompactionBoundaries() {
     // sizes becomes >= the expected mean size of a subcompaction
     sum = 0;
     for (size_t i = 0; i < ranges.size() - 1; i++) {
+      sum += ranges[i].size;
       if (subcompactions == 1) {
         // If there's only one left to schedule then it goes to the end so no
         // need to put an end boundary
-        break;
+        continue;
       }
-      sum += ranges[i].size;
       if (sum >= mean) {
         boundaries_.emplace_back(ExtractUserKey(ranges[i].range.limit));
         sizes_.emplace_back(sum);
@@ -509,18 +522,17 @@ Status CompactionJob::Run() {
   return status;
 }
 
-Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options,
-                              InstrumentedMutex* db_mutex) {
+Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_INSTALL);
-  db_mutex->AssertHeld();
+  db_mutex_->AssertHeld();
   Status status = compact_->status;
   ColumnFamilyData* cfd = compact_->compaction->column_family_data();
   cfd->internal_stats()->AddCompactionStats(
       compact_->compaction->output_level(), compaction_stats_);
 
   if (status.ok()) {
-    status = InstallCompactionResults(mutable_cf_options, db_mutex);
+    status = InstallCompactionResults(mutable_cf_options);
   }
   VersionStorageInfo::LevelSummaryStorage tmp;
   auto vstorage = cfd->current()->storage_info();
@@ -638,8 +650,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   Status status;
   sub_compact->c_iter.reset(new CompactionIterator(
       input.get(), cfd->user_comparator(), &merge, versions_->LastSequence(),
-      &existing_snapshots_, env_, false, sub_compact->compaction,
-      compaction_filter));
+      &existing_snapshots_, earliest_write_conflict_snapshot_, env_, false,
+      sub_compact->compaction, compaction_filter));
   auto c_iter = sub_compact->c_iter.get();
   c_iter->SeekToFirst();
   const auto& c_iter_stats = c_iter->iter_stats();
@@ -846,13 +858,33 @@ Status CompactionJob::FinishCompactionOutputFile(
           event_logger_, cfd->ioptions()->listeners, meta->fd, info);
     }
   }
+
+  // Report new file to SstFileManagerImpl
+  auto sfm =
+      static_cast<SstFileManagerImpl*>(db_options_.sst_file_manager.get());
+  if (sfm && meta->fd.GetPathId() == 0) {
+    ColumnFamilyData* cfd = sub_compact->compaction->column_family_data();
+    auto fn = TableFileName(cfd->ioptions()->db_paths, meta->fd.GetNumber(),
+                            meta->fd.GetPathId());
+    sfm->OnAddFile(fn);
+    if (sfm->IsMaxAllowedSpaceReached()) {
+      InstrumentedMutexLock l(db_mutex_);
+      if (db_bg_error_->ok()) {
+        s = Status::IOError("Max allowed space was reached");
+        *db_bg_error_ = s;
+        TEST_SYNC_POINT(
+            "CompactionJob::FinishCompactionOutputFile:MaxAllowedSpaceReached");
+      }
+    }
+  }
+
   sub_compact->builder.reset();
   return s;
 }
 
 Status CompactionJob::InstallCompactionResults(
-    const MutableCFOptions& mutable_cf_options, InstrumentedMutex* db_mutex) {
-  db_mutex->AssertHeld();
+    const MutableCFOptions& mutable_cf_options) {
+  db_mutex_->AssertHeld();
 
   auto* compaction = compact_->compaction;
   // paranoia: verify that the files that we started with
@@ -887,7 +919,7 @@ Status CompactionJob::InstallCompactionResults(
   }
   return versions_->LogAndApply(compaction->column_family_data(),
                                 mutable_cf_options, compaction->edit(),
-                                db_mutex, db_directory_);
+                                db_mutex_, db_directory_);
 }
 
 void CompactionJob::RecordCompactionIOStats() {

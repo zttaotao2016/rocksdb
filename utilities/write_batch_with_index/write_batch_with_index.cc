@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -706,7 +706,7 @@ Status WriteBatchWithIndex::GetFromBatchAndDB(DB* db,
   // Did not find key in batch OR could not resolve Merges.  Try DB.
   s = db->Get(read_options, column_family, key, value);
 
-  if (s.ok() || s.IsNotFound()) {  // DB Get Suceeded
+  if (s.ok() || s.IsNotFound()) {  // DB Get Succeeded
     if (result == WriteBatchWithIndexInternal::Result::kMergeInProgress) {
       // Merge result from DB with merges in Batch
       auto cfh = reinterpret_cast<ColumnFamilyHandleImpl*>(column_family);

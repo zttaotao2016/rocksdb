@@ -1,4 +1,4 @@
-//  Copyright (c) 2013, Facebook, Inc.  All rights reserved.
+//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
 //  This source code is licensed under the BSD-style license found in the
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
@@ -113,7 +113,7 @@ class Uint64ComparatorImpl : public Comparator {
 };
 }  // namespace
 
-static port::OnceType once = LEVELDB_ONCE_INIT;
+static port::OnceType once;
 static const Comparator* uint64comp;
 
 static void InitModule() {
@@ -200,6 +200,7 @@ BlockBasedTableOptions RandomBlockBasedTableOptions(Random* rnd) {
   opt.block_size = rnd->Uniform(10000000);
   opt.block_size_deviation = rnd->Uniform(100);
   opt.block_restart_interval = rnd->Uniform(100);
+  opt.index_block_restart_interval = rnd->Uniform(100);
   opt.whole_key_filtering = rnd->Uniform(2);
 
   return opt;
