@@ -397,6 +397,7 @@ class BlkCacheDBTest : public DBTestBase {
       auto page_cache = new_cache();
       assert(page_cache);
       table_options.page_cache = page_cache;
+      table_options.cache_index_and_filter_blocks = true;
 
       const uint64_t uint64_max = std::numeric_limits<uint64_t>::max();
 
@@ -434,7 +435,7 @@ class BlkCacheDBTest : public DBTestBase {
           table_options.block_cache = nullptr;
           table_options.block_cache_compressed = nullptr;
           options.table_factory.reset(NewBlockBasedTableFactory(table_options));
-          page_cache->type() = PageCache::Type::RAW;
+          page_cache->EnableRawCache();
           break;
         default:
           ASSERT_TRUE(false);

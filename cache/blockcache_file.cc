@@ -147,12 +147,14 @@ bool CacheRecord::Append(std::vector<CacheWriteBuffer*>& bufs, size_t& woff,
 
 bool CacheRecord::Deserialize(const Slice& data)
 {
+  assert(data.size() >= sizeof(CacheRecordHeader));
   if (data.size() < sizeof(CacheRecordHeader)) {
     return false;
   }
 
   memcpy(&hdr_, data.data(), sizeof(hdr_));
 
+  assert(hdr_.key_size_ + hdr_.val_size_ + sizeof(hdr_) == data.size());
   if (hdr_.key_size_ + hdr_.val_size_ + sizeof(hdr_) != data.size()) {
     return false;
   }
@@ -173,6 +175,7 @@ bool CacheRecord::Deserialize(const Slice& data)
     std::cerr << "** cksum " << hdr_.crc_ << " " << ComputeCRC() << std::endl;
   }
 
+  assert(hdr_.magic_ == MAGIC && ComputeCRC() == hdr_.crc_);
   return hdr_.magic_ == MAGIC && ComputeCRC() == hdr_.crc_;
 }
 
@@ -401,6 +404,8 @@ void WriteableCacheFile::BufferWriteDone(CacheWriteBuffer* const buf) {
 bool WriteableCacheFile::ReadImpl(const LBA& lba, Slice* key, Slice* block,
                                   char* scratch)
 {
+  rwlock_.AssertHeld();
+
   if (!ReadBuffer(lba, scratch)) {
     Error(log_, "Error reading from buffer. cache=%d off=%d", cache_id_,
           lba.off_);
@@ -447,9 +452,14 @@ bool WriteableCacheFile::ReadBuffer(const LBA& lba, char* data)
 }
 
 void WriteableCacheFile::Close() {
+  rwlock_.AssertHeld();
+
   assert(size_ >= max_size_);
   assert(disk_woff_ >= max_size_);
   assert(buf_doff_ == bufs_.size());
+  assert(bufs_.size() - buf_woff_ <= 1);
+  assert(!pending_ios_);
+
 
   Info(log_, "Closing file %s. size=%d written=%d", Path().c_str(), size_,
        disk_woff_);

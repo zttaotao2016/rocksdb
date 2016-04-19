@@ -99,6 +99,8 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
   assert(size);
   assert(cache_file_);
 
+  Timer timer;
+
   WriteLock _(&lock_);
 
   LBA lba;
@@ -112,6 +114,7 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
     if (!cache_file_->Eof()) {
       Debug(opt_.log, "Error inserting to cache file %d",
             cache_file_->cacheid());
+      stats_.write_latency_.Add(timer.ElapsedMicroSec());
       return Status::TryAgain();
     }
 
@@ -128,6 +131,7 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
 
   // update stats
   stats_.bytes_written_.Add(size);
+  stats_.write_latency_.Add(timer.ElapsedMicroSec());
 
   return Status::OK();
 }
@@ -135,13 +139,14 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
 Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
                               size_t* size)
 {
-  // ReadLock _(&lock_);
+  Timer timer;
 
   LBA lba;
   bool status;
   status = metadata_.Lookup(key, &lba);
   if (!status) {
     stats_.cache_misses_++;
+    stats_.read_miss_latency_.Add(timer.ElapsedMicroSec());
     return Status::NotFound("blockcache: key not found");
   }
 
@@ -150,6 +155,7 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
     // this can happen because the block index and cache file index are
     // different, and the cache file might be removed between the two lookups
     stats_.cache_misses_++;
+    stats_.read_miss_latency_.Add(timer.ElapsedMicroSec());
     return Status::NotFound("blockcache: cache file not found");
   }
 
@@ -164,6 +170,8 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   assert(status);
   if (!status) {
     stats_.cache_misses_++;
+    stats_.cache_errors_++;
+    stats_.read_miss_latency_.Add(timer.ElapsedMicroSec());
     return Status::NotFound("blockcache: error reading data");
   }
 
@@ -175,6 +183,7 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
 
   stats_.bytes_read_.Add(*size);
   stats_.cache_hits_++;
+  stats_.read_hit_latency_.Add(timer.ElapsedMicroSec());
 
   return Status::OK();
 }

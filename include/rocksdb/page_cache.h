@@ -21,16 +21,14 @@ namespace rocksdb {
 // Page cache interface for caching IO pages from the storage medium
 class PageCache {
  public:
-  PageCache() {}
-
-  virtual ~PageCache() {}
-
   enum class Type {
     // Cache blocks from device as-is (compressed/uncompressed)
     RAW,
     // Cache decompressed pages
     UNCOMPRESSED
   };
+
+  virtual ~PageCache() {}
 
   // Insert to page cache
   //
@@ -48,7 +46,13 @@ class PageCache {
   virtual Status Lookup(const Slice& page_key, std::unique_ptr<char[]>* data,
                         size_t* size) = 0;
 
-  Type& type() { return type_; }
+  void EnableRawCache() {
+    type_ = Type::RAW;
+  }
+
+  const Type& type() const {
+    return type_;
+  }
 
  protected:
   Type type_ = Type::UNCOMPRESSED;

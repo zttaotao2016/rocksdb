@@ -36,6 +36,7 @@
 
 #include "include/rocksdb/cache_tier.h"
 #include "cache/blockcache.h"
+#include "cache/cache_env.h"
 #include "db/db_impl.h"
 #include "db/version_set.h"
 #include "hdfs/env_hdfs.h"
@@ -71,6 +72,12 @@
 #ifdef OS_WIN
 #include <io.h>  // open/close
 #endif
+
+// Its a hack to get the stats
+static std::shared_ptr<rocksdb::CacheTier> page_cache;
+static std::shared_ptr<rocksdb::Cache> cache;
+static std::shared_ptr<rocksdb::Env> cache_env(new rocksdb::DirectIOEnv(
+  rocksdb::Env::Default()));
 
 namespace {
 using GFLAGS::ParseCommandLineFlags;
@@ -521,12 +528,12 @@ DEFINE_bool(compaction_measure_io_stats, false,
 // Tiered cache related changes
 DEFINE_bool(enable_tiered_block_cache, false,
             "Use tiered block caching instead of in-memory caching");
-
 DEFINE_string(block_cache_path, "/tmp/cache",
               "Path to store the block cache data");
-
 DEFINE_uint64(block_cache_size, std::numeric_limits<uint64_t>::max(),
               "Block cache size");
+DEFINE_bool(block_cache_enable_compressed_caching, false,
+            "Enable caching compressed data");
 
 enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {
   assert(ctype);
@@ -1365,6 +1372,10 @@ class Stats {
           next_report_ += FLAGS_stats_interval;
 
         } else {
+          if (id_ == 0 && page_cache) {
+            fprintf(stderr, "%" PRIu64 " %s\n", last_report_finish_,
+                    page_cache->PrintStats().c_str());
+          }
 
           fprintf(stderr,
                   "%s ... thread %d: (%" PRIu64 ",%" PRIu64 ") ops and "
@@ -4015,18 +4026,26 @@ int db_bench_tool(int argc, char** argv) {
     FLAGS_stats_interval = 1000;
   }
 
-  std::shared_ptr<rocksdb::Cache> cache;
-  std::shared_ptr<rocksdb::CacheTier> page_cache;
-  if (FLAGS_cache_size >= 0) {
-    if (FLAGS_enable_tiered_block_cache) {
-      std::shared_ptr<rocksdb::Logger> log;
-      rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_block_cache_path
-                                                          + "/LOG", &log);
-      assert(s.ok());
-      rocksdb::BlockCacheOptions opt(FLAGS_env, FLAGS_block_cache_path,
-                                     FLAGS_block_cache_size, log);
-      page_cache = std::move(rocksdb::TieredCache::New(FLAGS_cache_size, opt));
-    } else if (FLAGS_cache_numshardbits >= 1) {
+  if (FLAGS_enable_tiered_block_cache) {
+    std::shared_ptr<rocksdb::Logger> log;
+    rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_block_cache_path
+                                             + "/LOG", &log);
+    assert(s.ok());
+    rocksdb::BlockCacheOptions opt(cache_env.get(), FLAGS_block_cache_path,
+                                   FLAGS_block_cache_size, log);
+    opt.writer_qdepth = 4;
+    opt.writer_dispatch_size = 4 * 1024;
+    auto* impl = new rocksdb::BlockCacheImpl(opt);
+    if (FLAGS_block_cache_enable_compressed_caching) {
+      impl->EnableRawCache();
+    }
+    s = impl->Open();
+    assert(s.ok());
+    page_cache.reset(impl);
+  }
+
+  if (FLAGS_cache_size) {
+    if (FLAGS_cache_numshardbits >= 1) {
       cache = rocksdb::NewLRUCache(FLAGS_cache_size, FLAGS_cache_numshardbits);
     } else {
       cache = rocksdb::NewLRUCache(FLAGS_cache_size);

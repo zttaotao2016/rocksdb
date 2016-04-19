@@ -70,10 +70,18 @@ class BlockCacheImpl : public CacheTier {
        << stats_.cache_hits_ << std::endl
        << "pagecache.blockcache.cache_misses: "
        << stats_.cache_misses_ << std::endl
+       << "pagecache.blockcache.cache_errors: "
+       << stats_.cache_errors_ << std::endl
        << "pagecache.blockcache.cache_hits_pct: "
        << stats_.CacheHitPct() << std::endl
        << "pagecache.blockcache.cache_misses_pct: "
        << stats_.CacheMissPct() << std::endl
+       << "pagecache.blockcache.read_hit_latency: "
+       << stats_.read_hit_latency_.ToString() << std::endl
+       << "pagecache.blockcache.read_miss_latency: "
+       << stats_.read_miss_latency_.ToString() << std::endl
+       << "pagecache.blockcache.write_latency: "
+       << stats_.write_latency_.ToString() << std::endl
        << CacheTier::PrintStats();
     return os.str();
   }
@@ -122,8 +130,12 @@ class BlockCacheImpl : public CacheTier {
     HistogramImpl bytes_pipelined_;
     HistogramImpl bytes_written_;
     HistogramImpl bytes_read_;
+    HistogramImpl read_hit_latency_;
+    HistogramImpl read_miss_latency_;
+    HistogramImpl write_latency_;
     uint64_t cache_hits_ = 0;
     uint64_t cache_misses_ = 0;
+    uint64_t cache_errors_ = 0;
 
     double CacheHitPct() const {
       const auto lookups = cache_hits_ + cache_misses_;
@@ -131,8 +143,8 @@ class BlockCacheImpl : public CacheTier {
     }
 
     double CacheMissPct() const {
-      const auto lookups = cache_misses_ + cache_misses_;
-      return lookups ? 100 * cache_hits_ / (double) lookups : 0.0;
+      const auto lookups = cache_hits_ + cache_misses_;
+      return lookups ? 100 * cache_misses_ / (double) lookups : 0.0;
     }
   };
 

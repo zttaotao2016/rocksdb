@@ -78,7 +78,7 @@ struct BlockCacheOptions {
 
   // The writers can issues IO to the devices in parallel. This parameter
   // controls the qdepth to use for a given block device
-  uint32_t writer_qdepth = 2;
+  uint32_t writer_qdepth = 1;
 
   // Pipeline writes. The write will be delayed and asynchronous. This helps
   // avoid regression in the eviction code path of the primary tier
@@ -126,7 +126,7 @@ struct LogicalBlockAddress {
 
   uint32_t cache_id_ = 0;
   uint32_t off_ = 0;
-  uint16_t size_ = 0;
+  uint32_t size_ = 0;
 };
 
 typedef LogicalBlockAddress LBA;

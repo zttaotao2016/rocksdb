@@ -94,10 +94,13 @@ class ThreadedWriter : public Writer {
       Slice data(io.buf_->Data() + written, io_size_);
       Status s = io.file_->file_->PositionedAppend(
         data, io.file_off_ + written);
+      assert(s.ok());
       if (!s.ok()) {
         // That is definite IO error to device. There is not much we can
         // do but ignore the failure. This can lead to corruption of data on
         // disk, but the cache will skip while reading
+        std::cerr << "Error writing data to file. " << s.ToString()
+                  << std::endl;
       }
       written += io_size_;
     }

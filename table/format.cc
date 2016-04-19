@@ -339,6 +339,11 @@ void UpdateUncompressedPageCache(const PageCacheOptions& cache_options,
   auto key = BlockBasedTable::GetCacheKey(cache_options.key_prefix.c_str(),
                                           cache_options.key_prefix.size(),
                                           handle, cache_key);
+
+  // please note we potentially are comparing uncompressed and compressed data
+  // sizes
+  assert(contents.data.size() >= handle.size());
+
   // insert block contents to page cache
   cache_options.page_cache->Insert(key, contents.data.data(),
                                    contents.data.size());
@@ -404,6 +409,10 @@ Status LookupUncompressedPage(const PageCacheOptions& cache_options,
     return s;
   }
 
+  // please note we potentially are comparing compressed and uncompressed data
+  // sizes
+  assert(handle.size() <= size);
+
   // update stats
   RecordTick(cache_options.statistics, PAGE_CACHE_HIT);
   // construct result and return
@@ -425,6 +434,8 @@ Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
   char stack_buf[DefaultStackBufferSize];
   char* used_buf = nullptr;
   rocksdb::CompressionType compression_type;
+
+  assert(n);
 
   if (LookupUncompressedPage(cache_options, handle, contents).ok()) {
     // uncompressed page is found for the block handle
@@ -478,6 +489,10 @@ Status ReadBlockContents(RandomAccessFileReader* file, const Footer& footer,
 
   if (slice.data() != used_buf) {
     *contents = BlockContents(Slice(slice.data(), n), false, compression_type);
+    if (read_options.fill_cache) {
+      // insert to uncompressed cache
+      UpdateUncompressedPageCache(cache_options, handle, *contents);
+    }
     return status;
   }
 

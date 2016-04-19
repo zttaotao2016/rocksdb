@@ -106,6 +106,13 @@ class DirectIOFile {
     return PosixHelper::GetUniqueIdFromFile(fd_, id, max_size);
   }
 
+  virtual Status Flush() {
+    if (fsync(fd_) != 0) {
+      return Status::IOError(strerror(errno));
+    }
+    return Status::OK();
+  }
+
  private:
   static const size_t SECTOR_SIZE = 512;
   static const size_t PAGE_SIZE = 4 * 1024;
@@ -255,7 +262,7 @@ class DirectIOWritableFile : public WritableFile {
   }
 
   Status Flush() override {
-    return Status::NotSupported();
+    return file_.Flush();
   }
 
   uint64_t GetFileSize() override {
