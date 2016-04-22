@@ -25,7 +25,7 @@ class DirectIOFile {
   }
 
   virtual Status OpenForWriting() {
-    return Open(O_WRONLY | O_TRUNC | O_CREAT);
+    return Open(O_WRONLY | O_TRUNC | O_CREAT | O_APPEND);
   }
 
   virtual Status Append(const Slice& data) {

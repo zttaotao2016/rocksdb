@@ -529,14 +529,15 @@ DEFINE_bool(report_bg_io_stats, false,
             "Measure times spents on I/Os while in compactions. ");
 
 // Tiered cache related changes
-DEFINE_bool(enable_tiered_block_cache, false,
-            "Use tiered block caching instead of in-memory caching");
-DEFINE_string(block_cache_path, "/tmp/cache",
+DEFINE_bool(enable_persistent_cache, false,
+            "Use persistent caching (block content cache)");
+DEFINE_string(persistent_cache_path, "",
               "Path to store the block cache data");
-DEFINE_uint64(block_cache_size, std::numeric_limits<uint64_t>::max(),
-              "Block cache size");
-DEFINE_bool(block_cache_enable_compressed_caching, false,
+DEFINE_uint64(persistent_cache_size, 0, "Persistent cache size");
+DEFINE_bool(enable_persistent_cache_raw_mode, true,
             "Enable caching compressed data");
+DEFINE_bool(configure_persistent_cache_ssd, false,
+            "Configure persistent cache for optimal performance on SSD");
 
 enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {
   assert(ctype);
@@ -4042,21 +4043,36 @@ int db_bench_tool(int argc, char** argv) {
     FLAGS_stats_interval = 1000;
   }
 
-  if (FLAGS_enable_tiered_block_cache) {
+  if (FLAGS_enable_persistent_cache) {
+    assert(!FLAGS_persistent_cache_path.empty());
+    assert(FLAGS_persistent_cache_size);
+
+    // log
     std::shared_ptr<rocksdb::Logger> log;
-    rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_block_cache_path
+    rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_persistent_cache_path
                                              + "/LOG", &log);
     assert(s.ok());
-    rocksdb::BlockCacheOptions opt(cache_env.get(), FLAGS_block_cache_path,
-                                   FLAGS_block_cache_size, log);
-    opt.writer_qdepth = 4;
-    opt.writer_dispatch_size = 4 * 1024;
+    // fix env
+    if (FLAGS_configure_persistent_cache_ssd) {
+      cache_env.reset();
+    }
+    // create options
+    rocksdb::BlockCacheOptions opt(cache_env ? cache_env.get() : Env::Default(),
+                                   FLAGS_persistent_cache_path,
+                                   FLAGS_persistent_cache_size, log);
+
+    if (!FLAGS_configure_persistent_cache_ssd) {
+      opt.writer_qdepth = 4;
+      opt.writer_dispatch_size = 4 * 1024;
+    }
+    // create implementation
     auto* impl = new rocksdb::BlockCacheImpl(opt);
-    if (FLAGS_block_cache_enable_compressed_caching) {
+    if (FLAGS_enable_persistent_cache_raw_mode) {
       impl->EnableRawCache();
     }
     s = impl->Open();
     assert(s.ok());
+    // attach
     page_cache.reset(impl);
   }
 

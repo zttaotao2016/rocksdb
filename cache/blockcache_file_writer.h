@@ -92,8 +92,7 @@ class ThreadedWriter : public Writer {
     size_t written = 0;
     while (written < io.buf_->Used()) {
       Slice data(io.buf_->Data() + written, io_size_);
-      Status s = io.file_->file_->PositionedAppend(
-        data, io.file_off_ + written);
+      Status s = io.file_->file_->Append(data);
       assert(s.ok());
       if (!s.ok()) {
         // That is definite IO error to device. There is not much we can
