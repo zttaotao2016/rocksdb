@@ -1,4 +1,14 @@
 # Rocksdb Change Log
+## Unreleased
+### Public API Change
+* Delete deprecated classes for creating backups (BackupableDB) and restoring from backups (RestoreBackupableDB). Now, BackupEngine should be used for creating backups, and BackupEngineReadOnly should be used for restorations. For more details, see https://github.com/facebook/rocksdb/wiki/How-to-backup-RocksDB%3F
+* Expose estimate of per-level compression ratio via DB property: "rocksdb.compression-ratio-at-levelN".
+
+## 4.7.0 (4/8/2016)
+### Public API Change
+* rename options compaction_measure_io_stats to report_bg_io_stats and include flush too.
+* Change some default options. Now default options will optimize for server-workloads. Also enable slowdown and full stop triggers for pending compaction bytes. These changes may cause sub-optimal performance or significant increase of resource usage. To avoid these risks, users can open existing RocksDB with options extracted from RocksDB option files. See https://github.com/facebook/rocksdb/wiki/RocksDB-Options-File for how to use RocksDB option files. Or you can call Options.OldDefaults() to recover old defaults. DEFAULT_OPTIONS_HISTORY.md will track change history of default options.
+
 ## 4.6.0 (3/10/2016)
 ### Public API Changes
 * Change default of BlockBasedTableOptions.format_version to 2. It means default DB created by 4.6 or up cannot be opened by RocksDB version 3.9 or earlier.

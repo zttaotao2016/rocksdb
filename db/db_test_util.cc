@@ -210,6 +210,8 @@ Options DBTestBase::CurrentOptions(
     const anon::OptionsOverride& options_override) {
   Options options;
   options.write_buffer_size = 4090 * 4096;
+  options.target_file_size_base = 2 * 1024 * 1024;
+  options.max_bytes_for_level_base = 10 * 1024 * 1024;
   return CurrentOptions(options, options_override);
 }
 
@@ -301,6 +303,7 @@ Options DBTestBase::CurrentOptions(
     case kPerfOptions:
       options.soft_rate_limit = 2.0;
       options.delayed_write_rate = 8 * 1024 * 1024;
+      options.report_bg_io_stats = true;
       // TODO(3.13) -- test more options
       break;
     case kDeletesFilterFirst:
@@ -711,6 +714,22 @@ int DBTestBase::NumTableFilesAtLevel(int level, int cf) {
   return atoi(property.c_str());
 }
 
+double DBTestBase::CompressionRatioAtLevel(int level, int cf) {
+  std::string property;
+  if (cf == 0) {
+    // default cfd
+    EXPECT_TRUE(db_->GetProperty(
+        "rocksdb.compression-ratio-at-level" + NumberToString(level),
+        &property));
+  } else {
+    EXPECT_TRUE(db_->GetProperty(
+        handles_[cf],
+        "rocksdb.compression-ratio-at-level" + NumberToString(level),
+        &property));
+  }
+  return std::stod(property);
+}
+
 int DBTestBase::TotalTableFiles(int cf, int levels) {
   if (levels == -1) {
     levels = CurrentOptions().num_levels;
@@ -1039,5 +1058,35 @@ std::unordered_map<std::string, uint64_t> DBTestBase::GetAllSSTFiles(
   }
   return res;
 }
+
+std::vector<std::uint64_t> DBTestBase::ListTableFiles(Env* env,
+                                                      const std::string& path) {
+  std::vector<std::string> files;
+  std::vector<uint64_t> file_numbers;
+  env->GetChildren(path, &files);
+  uint64_t number;
+  FileType type;
+  for (size_t i = 0; i < files.size(); ++i) {
+    if (ParseFileName(files[i], &number, &type)) {
+      if (type == kTableFile) {
+        file_numbers.push_back(number);
+      }
+    }
+  }
+  return file_numbers;
+}
+
+#ifndef ROCKSDB_LITE
+uint64_t DBTestBase::GetNumberOfSstFilesForColumnFamily(
+    DB* db, std::string column_family_name) {
+  std::vector<LiveFileMetaData> metadata;
+  db->GetLiveFilesMetaData(&metadata);
+  uint64_t result = 0;
+  for (auto& fileMetadata : metadata) {
+    result += (fileMetadata.column_family_name == column_family_name);
+  }
+  return result;
+}
+#endif  // ROCKSDB_LITE
 
 }  // namespace rocksdb

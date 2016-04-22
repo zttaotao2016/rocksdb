@@ -19,6 +19,7 @@
 #include "rocksdb/perf_level.h"
 #include "rocksdb/table.h"
 #include "util/random.h"
+#include "util/string_util.h"
 
 namespace rocksdb {
 
@@ -251,6 +252,35 @@ TEST_F(DBPropertiesTest, ValidatePropertyInfo) {
     ASSERT_TRUE((ppt_name_and_info.second.handle_string == nullptr) !=
                 (ppt_name_and_info.second.handle_int == nullptr));
   }
+}
+
+TEST_F(DBPropertiesTest, ValidateSampleNumber) {
+  // When "max_open_files" is -1, we read all the files for
+  // "rocksdb.estimate-num-keys" computation, which is the ground truth.
+  // Otherwise, we sample 20 newest files to make an estimation.
+  // Formula: lastest_20_files_active_key_ratio * total_files
+  Options options = CurrentOptions();
+  options.disable_auto_compactions = true;
+  options.level0_stop_writes_trigger = 1000;
+  DestroyAndReopen(options);
+  int key = 0;
+  for (int files = 20; files >= 10; files -= 10) {
+    for (int i = 0; i < files; i++) {
+      int rows = files / 10;
+      for (int j = 0; j < rows; j++) {
+        db_->Put(WriteOptions(), std::to_string(++key), "foo");
+      }
+      db_->Flush(FlushOptions());
+    }
+  }
+  std::string num;
+  Reopen(options);
+  ASSERT_TRUE(dbfull()->GetProperty("rocksdb.estimate-num-keys", &num));
+  ASSERT_EQ("45", num);
+  options.max_open_files = -1;
+  Reopen(options);
+  ASSERT_TRUE(dbfull()->GetProperty("rocksdb.estimate-num-keys", &num));
+  ASSERT_EQ("50", num);
 }
 
 TEST_F(DBPropertiesTest, AggregatedTableProperties) {
@@ -869,6 +899,48 @@ TEST_F(DBPropertiesTest, EstimatePendingCompBytes) {
       "rocksdb.estimate-pending-compaction-bytes", &int_num));
   ASSERT_EQ(int_num, 0U);
 }
+
+TEST_F(DBPropertiesTest, EstimateCompressionRatio) {
+  if (!Snappy_Supported()) {
+    return;
+  }
+  const int kNumL0Files = 3;
+  const int kNumEntriesPerFile = 1000;
+
+  Options options = CurrentOptions();
+  options.compression_per_level = {kNoCompression, kSnappyCompression};
+  options.disable_auto_compactions = true;
+  options.max_background_flushes = 0;
+  options.num_levels = 2;
+  Reopen(options);
+
+  // compression ratio is -1.0 when no open files at level
+  ASSERT_EQ(CompressionRatioAtLevel(0), -1.0);
+
+  const std::string kVal(100, 'a');
+  for (int i = 0; i < kNumL0Files; ++i) {
+    for (int j = 0; j < kNumEntriesPerFile; ++j) {
+      // Put common data ("key") at end to prevent delta encoding from
+      // compressing the key effectively
+      std::string key = ToString(i) + ToString(j) + "key";
+      ASSERT_OK(dbfull()->Put(WriteOptions(), key, kVal));
+    }
+    Flush();
+  }
+
+  // no compression at L0, so ratio is less than one
+  ASSERT_LT(CompressionRatioAtLevel(0), 1.0);
+  ASSERT_GT(CompressionRatioAtLevel(0), 0.0);
+  ASSERT_EQ(CompressionRatioAtLevel(1), -1.0);
+
+  dbfull()->TEST_CompactRange(0, nullptr, nullptr);
+
+  ASSERT_EQ(CompressionRatioAtLevel(0), -1.0);
+  // Data at L1 should be highly compressed thanks to Snappy and redundant data
+  // in values (ratio is 12.846 as of 4/19/2016).
+  ASSERT_GT(CompressionRatioAtLevel(1), 10.0);
+}
+
 #endif  // ROCKSDB_LITE
 
 class CountingUserTblPropCollector : public TablePropertiesCollector {

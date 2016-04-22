@@ -60,14 +60,7 @@ std::string BlockHandle::ToString(bool hex) const {
   std::string handle_str;
   EncodeTo(&handle_str);
   if (hex) {
-    std::string result;
-    char buf[10];
-    for (size_t i = 0; i < handle_str.size(); i++) {
-      snprintf(buf, sizeof(buf), "%02X",
-               static_cast<unsigned char>(handle_str[i]));
-      result += buf;
-    }
-    return result;
+    return Slice(handle_str).ToString(true);
   } else {
     return handle_str;
   }
@@ -532,7 +525,7 @@ Status UncompressBlockContents(const char* data, size_t n,
       if (!Snappy_GetUncompressedLength(data, n, &ulength)) {
         return Status::Corruption(snappy_corrupt_msg);
       }
-      ubuf = std::unique_ptr<char[]>(new char[ulength]);
+      ubuf.reset(new char[ulength]);
       if (!Snappy_Uncompress(data, n, ubuf.get())) {
         return Status::Corruption(snappy_corrupt_msg);
       }
@@ -540,7 +533,7 @@ Status UncompressBlockContents(const char* data, size_t n,
       break;
     }
     case kZlibCompression:
-      ubuf = std::unique_ptr<char[]>(Zlib_Uncompress(
+      ubuf.reset(Zlib_Uncompress(
           data, n, &decompress_size,
           GetCompressFormatForVersion(kZlibCompression, format_version)));
       if (!ubuf) {
@@ -552,7 +545,7 @@ Status UncompressBlockContents(const char* data, size_t n,
           BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kBZip2Compression:
-      ubuf = std::unique_ptr<char[]>(BZip2_Uncompress(
+      ubuf.reset(BZip2_Uncompress(
           data, n, &decompress_size,
           GetCompressFormatForVersion(kBZip2Compression, format_version)));
       if (!ubuf) {
@@ -564,7 +557,7 @@ Status UncompressBlockContents(const char* data, size_t n,
           BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kLZ4Compression:
-      ubuf = std::unique_ptr<char[]>(LZ4_Uncompress(
+      ubuf.reset(LZ4_Uncompress(
           data, n, &decompress_size,
           GetCompressFormatForVersion(kLZ4Compression, format_version)));
       if (!ubuf) {
@@ -576,7 +569,7 @@ Status UncompressBlockContents(const char* data, size_t n,
           BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
     case kLZ4HCCompression:
-      ubuf = std::unique_ptr<char[]>(LZ4_Uncompress(
+      ubuf.reset(LZ4_Uncompress(
           data, n, &decompress_size,
           GetCompressFormatForVersion(kLZ4HCCompression, format_version)));
       if (!ubuf) {
@@ -587,9 +580,18 @@ Status UncompressBlockContents(const char* data, size_t n,
       *contents =
           BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
       break;
+    case kXpressCompression:
+      ubuf.reset(XPRESS_Uncompress(data, n, &decompress_size));
+      if (!ubuf) {
+        static char xpress_corrupt_msg[] =
+          "XPRESS not supported or corrupted XPRESS compressed block contents";
+        return Status::Corruption(xpress_corrupt_msg);
+      }
+      *contents =
+        BlockContents(std::move(ubuf), decompress_size, true, kNoCompression);
+      break;
     case kZSTDNotFinalCompression:
-      ubuf =
-          std::unique_ptr<char[]>(ZSTD_Uncompress(data, n, &decompress_size));
+      ubuf.reset(ZSTD_Uncompress(data, n, &decompress_size));
       if (!ubuf) {
         static char zstd_corrupt_msg[] =
             "ZSTD not supported or corrupted ZSTD compressed block contents";

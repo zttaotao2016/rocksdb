@@ -311,10 +311,6 @@ TEST_F(BlockCacheImplTest, TieredCacheInsertWithEviction) {
 //
 // RocksDB tests
 //
-static long TestGetTickerCount(const Options& options, Tickers ticker_type) {
-  return options.statistics->getTickerCount(ticker_type);
-}
-
 class BlkCacheDBTest : public DBTestBase {
  public:
   BlkCacheDBTest()
@@ -333,6 +329,12 @@ class BlkCacheDBTest : public DBTestBase {
     const auto memory_size = 1 * 1024 * 1024;
     return NewTieredCache(cache_env_, dbname_, memory_size);
   }
+
+  static uint32_t TestGetTickerCount(const Options& options,
+                                     Tickers ticker_type) {
+    return options.statistics->getTickerCount(ticker_type);
+  }
+
 
   // insert data to table
   void Insert(const Options& options,

@@ -82,7 +82,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Oxt /Zp8 /Gm- /Gy /MD")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} /DEBUG")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DEBUG")
 
-add_definitions(-DWIN32 -DOS_WIN -D_MBCS -DWIN64)
+add_definitions(-DWIN32 -DOS_WIN -D_MBCS -DWIN64 -DNOMINMAX)
 
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -90,7 +90,7 @@ include_directories(${PROJECT_SOURCE_DIR}/third-party/gtest-1.7.0/fused-src)
 
 set(ROCKSDB_LIBS rocksdblib${ARTIFACT_SUFFIX})
 set(THIRDPARTY_LIBS ${THIRDPARTY_LIBS} gtest)
-set(SYSTEM_LIBS Shlwapi.lib Rpcrt4.lib)
+set(SYSTEM_LIBS ${SYSTEM_LIBS} Shlwapi.lib Rpcrt4.lib)
 
 set(LIBS ${ROCKSDB_LIBS} ${THIRDPARTY_LIBS} ${SYSTEM_LIBS})
 
@@ -156,6 +156,7 @@ set(SOURCES
         port/win/env_win.cc
         port/win/port_win.cc
         port/win/win_logger.cc
+        port/win/xpress_win.cc
         table/adaptive_table_factory.cc
         table/block.cc
         table/block_based_filter_block.cc
@@ -310,6 +311,7 @@ set(APPS
         tools/db_stress.cc
         tools/write_stress.cc
         tools/db_repl_stress.cc
+        tools/ldb.cc
         tools/sst_dump.cc
         tools/dump/rocksdb_dump.cc
         tools/dump/rocksdb_undump.cc
@@ -341,6 +343,9 @@ set(TESTS
         db/db_test.cc
         db/db_test2.cc
         db/db_block_cache_test.cc
+        db/db_bloom_filter_test.cc
+        db/db_iterator_test.cc
+        db/db_sst_test.cc
         db/db_universal_compaction_test.cc
         db/db_wal_test.cc
         db/dbformat_test.cc
@@ -399,6 +404,7 @@ set(TESTS
         util/iostats_context_test.cc
         util/memenv_test.cc
         util/mock_env_test.cc
+        util/options_settable_test.cc
         util/options_test.cc
         util/rate_limiter_test.cc
         util/slice_transform_test.cc

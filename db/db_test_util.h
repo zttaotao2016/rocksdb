@@ -39,6 +39,7 @@
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
+#include "rocksdb/statistics.h"
 #include "rocksdb/table.h"
 #include "rocksdb/utilities/checkpoint.h"
 #include "table/block_based_table_factory.h"
@@ -491,6 +492,33 @@ class SpecialEnv : public EnvWrapper {
   std::atomic<bool> is_wal_sync_thread_safe_{true};
 };
 
+#ifndef ROCKSDB_LITE
+class OnFileDeletionListener : public EventListener {
+ public:
+  OnFileDeletionListener() : matched_count_(0), expected_file_name_("") {}
+
+  void SetExpectedFileName(const std::string file_name) {
+    expected_file_name_ = file_name;
+  }
+
+  void VerifyMatchedCount(size_t expected_value) {
+    ASSERT_EQ(matched_count_, expected_value);
+  }
+
+  void OnTableFileDeleted(const TableFileDeletionInfo& info) override {
+    if (expected_file_name_ != "") {
+      ASSERT_EQ(expected_file_name_, info.file_path);
+      expected_file_name_ = "";
+      matched_count_++;
+    }
+  }
+
+ private:
+  size_t matched_count_;
+  std::string expected_file_name_;
+};
+#endif
+
 class DBTestBase : public testing::Test {
  protected:
   // Sequence of option configurations to try
@@ -672,6 +700,8 @@ class DBTestBase : public testing::Test {
 
   int NumTableFilesAtLevel(int level, int cf = 0);
 
+  double CompressionRatioAtLevel(int level, int cf = 0);
+
   int TotalTableFiles(int cf = 0, int levels = -1);
 
   // Return spread of files per level
@@ -756,6 +786,17 @@ class DBTestBase : public testing::Test {
 
   std::unordered_map<std::string, uint64_t> GetAllSSTFiles(
       uint64_t* total_size = nullptr);
+
+  std::vector<std::uint64_t> ListTableFiles(Env* env, const std::string& path);
+
+#ifndef ROCKSDB_LITE
+  uint64_t GetNumberOfSstFilesForColumnFamily(DB* db,
+                                              std::string column_family_name);
+#endif  // ROCKSDB_LITE
+
+  uint64_t TestGetTickerCount(const Options& options, Tickers ticker_type) {
+    return options.statistics->getTickerCount(ticker_type);
+  }
 };
 
 }  // namespace rocksdb

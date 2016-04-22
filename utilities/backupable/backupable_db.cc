@@ -88,9 +88,10 @@ class BackupEngineImpl : public BackupEngine {
   BackupEngineImpl(Env* db_env, const BackupableDBOptions& options,
                    bool read_only = false);
   ~BackupEngineImpl();
-  Status CreateNewBackup(DB* db, bool flush_before_backup = false,
-                         std::function<void()> progress_callback = []() {
-                         }) override;
+  Status CreateNewBackupWithMetadata(DB* db, const std::string& app_metadata,
+                                     bool flush_before_backup = false,
+                                     std::function<void()> progress_callback =
+                                         []() {}) override;
   Status PurgeOldBackups(uint32_t num_backups_to_keep) override;
   Status DeleteBackup(BackupID backup_id) override;
   void StopBackup() override {
@@ -166,6 +167,12 @@ class BackupEngineImpl : public BackupEngine {
       return sequence_number_;
     }
 
+    const std::string& GetAppMetadata() const { return app_metadata_; }
+
+    void SetAppMetadata(const std::string& app_metadata) {
+      app_metadata_ = app_metadata;
+    }
+
     Status AddFile(std::shared_ptr<FileInfo> file_info);
 
     Status Delete(bool delete_meta = true);
@@ -212,6 +219,7 @@ class BackupEngineImpl : public BackupEngine {
     // by clients
     uint64_t sequence_number_;
     uint64_t size_;
+    std::string app_metadata_;
     std::string const meta_filename_;
     // files with relative paths (without "/" prefix!!)
     std::vector<std::shared_ptr<FileInfo>> files_;
@@ -464,6 +472,7 @@ class BackupEngineImpl : public BackupEngine {
   size_t copy_file_buffer_size_;
   bool read_only_;
   BackupStatistics backup_statistics_;
+  static const size_t kMaxAppMetaSize = 1024 * 1024;  // 1MB
 };
 
 Status BackupEngine::Open(Env* env, const BackupableDBOptions& options,
@@ -641,10 +650,14 @@ Status BackupEngineImpl::Initialize() {
   return Status::OK();
 }
 
-Status BackupEngineImpl::CreateNewBackup(
-    DB* db, bool flush_before_backup, std::function<void()> progress_callback) {
+Status BackupEngineImpl::CreateNewBackupWithMetadata(
+    DB* db, const std::string& app_metadata, bool flush_before_backup,
+    std::function<void()> progress_callback) {
   assert(initialized_);
   assert(!read_only_);
+  if (app_metadata.size() > kMaxAppMetaSize) {
+    return Status::InvalidArgument("App metadata too large");
+  }
   Status s;
   std::vector<std::string> live_files;
   VectorLogPtr live_wal_files;
@@ -678,6 +691,7 @@ Status BackupEngineImpl::CreateNewBackup(
   auto& new_backup = ret.first->second;
   new_backup->RecordTimestamp();
   new_backup->SetSequenceNumber(sequence_number);
+  new_backup->SetAppMetadata(app_metadata);
 
   auto start_backup = backup_env_-> NowMicros();
 
@@ -957,10 +971,9 @@ void BackupEngineImpl::GetBackupInfo(std::vector<BackupInfo>* backup_info) {
   backup_info->reserve(backups_.size());
   for (auto& backup : backups_) {
     if (!backup.second->Empty()) {
-        backup_info->push_back(BackupInfo(
-            backup.first, backup.second->GetTimestamp(),
-            backup.second->GetSize(),
-            backup.second->GetNumberFiles()));
+      backup_info->push_back(BackupInfo(
+          backup.first, backup.second->GetTimestamp(), backup.second->GetSize(),
+          backup.second->GetNumberFiles(), backup.second->GetAppMetadata()));
     }
   }
 }
@@ -1455,8 +1468,13 @@ Status BackupEngineImpl::GarbageCollect() {
     // delete obsolete shared files
     std::vector<std::string> shared_children;
     {
-      auto s = backup_env_->GetChildren(GetAbsolutePath(GetSharedFileRel()),
-                                        &shared_children);
+      auto shared_path = GetAbsolutePath(GetSharedFileRel());
+      auto s = backup_env_->FileExists(shared_path);
+      if (s.ok()) {
+        s = backup_env_->GetChildren(shared_path, &shared_children);
+      } else if (s.IsNotFound()) {
+        s = Status::OK();
+      }
       if (!s.ok()) {
         return s;
       }
@@ -1562,9 +1580,12 @@ Status BackupEngineImpl::BackupMeta::Delete(bool delete_meta) {
   return s;
 }
 
+Slice kMetaDataPrefix("metadata ");
+
 // each backup meta file is of the format:
 // <timestamp>
 // <seq number>
+// <metadata(literal string)> <metadata> (optional)
 // <number of files>
 // <file1> <crc32(literal string)> <crc32_value>
 // <file2> <crc32(literal string)> <crc32_value>
@@ -1597,6 +1618,18 @@ Status BackupEngineImpl::BackupMeta::LoadFromFile(
   data.remove_prefix(next - data.data() + 1); // +1 for '\n'
   sequence_number_ = strtoull(data.data(), &next, 10);
   data.remove_prefix(next - data.data() + 1); // +1 for '\n'
+
+  if (data.starts_with(kMetaDataPrefix)) {
+    // app metadata present
+    data.remove_prefix(kMetaDataPrefix.size());
+    Slice hex_encoded_metadata = GetSliceUntil(&data, '\n');
+    bool decode_success = hex_encoded_metadata.DecodeHex(&app_metadata_);
+    if (!decode_success) {
+      return Status::Corruption(
+          "Failed to decode stored hex encoded app metadata");
+    }
+  }
+
   num_files = static_cast<uint32_t>(strtoul(data.data(), &next, 10));
   data.remove_prefix(next - data.data() + 1); // +1 for '\n'
 
@@ -1674,10 +1707,24 @@ Status BackupEngineImpl::BackupMeta::StoreToFile(bool sync) {
   }
 
   unique_ptr<char[]> buf(new char[max_backup_meta_file_size_]);
-  int len = 0, buf_size = max_backup_meta_file_size_;
+  size_t len = 0, buf_size = max_backup_meta_file_size_;
   len += snprintf(buf.get(), buf_size, "%" PRId64 "\n", timestamp_);
   len += snprintf(buf.get() + len, buf_size - len, "%" PRIu64 "\n",
                   sequence_number_);
+  if (!app_metadata_.empty()) {
+    std::string hex_encoded_metadata =
+        Slice(app_metadata_).ToString(/* hex */ true);
+    if (hex_encoded_metadata.size() + kMetaDataPrefix.size() + 1 >
+        buf_size - len) {
+      return Status::Corruption("Buffer too small to fit backup metadata");
+    }
+    memcpy(buf.get() + len, kMetaDataPrefix.data(), kMetaDataPrefix.size());
+    len += kMetaDataPrefix.size();
+    memcpy(buf.get() + len, hex_encoded_metadata.data(),
+           hex_encoded_metadata.size());
+    len += hex_encoded_metadata.size();
+    buf[len++] = '\n';
+  }
   len += snprintf(buf.get() + len, buf_size - len, "%" ROCKSDB_PRIszt "\n",
                   files_.size());
   for (const auto& file : files_) {
@@ -1686,7 +1733,7 @@ Status BackupEngineImpl::BackupMeta::StoreToFile(bool sync) {
                     file->filename.c_str(), file->checksum_value);
   }
 
-  s = backup_meta_file->Append(Slice(buf.get(), (size_t)len));
+  s = backup_meta_file->Append(Slice(buf.get(), len));
   if (s.ok() && sync) {
     s = backup_meta_file->Sync();
   }
@@ -1755,136 +1802,6 @@ Status BackupEngineReadOnly::Open(Env* env, const BackupableDBOptions& options,
   }
   *backup_engine_ptr = backup_engine.release();
   return Status::OK();
-}
-
-// --- BackupableDB methods --------
-
-BackupableDB::BackupableDB(DB* db, const BackupableDBOptions& options)
-    : StackableDB(db) {
-  auto backup_engine_impl = new BackupEngineImpl(db->GetEnv(), options);
-  status_ = backup_engine_impl->Initialize();
-  backup_engine_ = backup_engine_impl;
-}
-
-BackupableDB::~BackupableDB() {
-  delete backup_engine_;
-}
-
-Status BackupableDB::CreateNewBackup(bool flush_before_backup) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->CreateNewBackup(this, flush_before_backup);
-}
-
-void BackupableDB::GetBackupInfo(std::vector<BackupInfo>* backup_info) {
-  if (!status_.ok()) {
-    return;
-  }
-  backup_engine_->GetBackupInfo(backup_info);
-}
-
-void
-BackupableDB::GetCorruptedBackups(std::vector<BackupID>* corrupt_backup_ids) {
-  if (!status_.ok()) {
-    return;
-  }
-  backup_engine_->GetCorruptedBackups(corrupt_backup_ids);
-}
-
-Status BackupableDB::PurgeOldBackups(uint32_t num_backups_to_keep) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->PurgeOldBackups(num_backups_to_keep);
-}
-
-Status BackupableDB::DeleteBackup(BackupID backup_id) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->DeleteBackup(backup_id);
-}
-
-void BackupableDB::StopBackup() {
-  backup_engine_->StopBackup();
-}
-
-Status BackupableDB::GarbageCollect() {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->GarbageCollect();
-}
-
-// --- RestoreBackupableDB methods ------
-
-RestoreBackupableDB::RestoreBackupableDB(Env* db_env,
-                                         const BackupableDBOptions& options) {
-  auto backup_engine_impl = new BackupEngineImpl(db_env, options);
-  status_ = backup_engine_impl->Initialize();
-  backup_engine_ = backup_engine_impl;
-}
-
-RestoreBackupableDB::~RestoreBackupableDB() {
-  delete backup_engine_;
-}
-
-void
-RestoreBackupableDB::GetBackupInfo(std::vector<BackupInfo>* backup_info) {
-  if (!status_.ok()) {
-    return;
-  }
-  backup_engine_->GetBackupInfo(backup_info);
-}
-
-void RestoreBackupableDB::GetCorruptedBackups(
-    std::vector<BackupID>* corrupt_backup_ids) {
-  if (!status_.ok()) {
-    return;
-  }
-  backup_engine_->GetCorruptedBackups(corrupt_backup_ids);
-}
-
-Status RestoreBackupableDB::RestoreDBFromBackup(
-    BackupID backup_id, const std::string& db_dir, const std::string& wal_dir,
-    const RestoreOptions& restore_options) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->RestoreDBFromBackup(backup_id, db_dir, wal_dir,
-                                             restore_options);
-}
-
-Status RestoreBackupableDB::RestoreDBFromLatestBackup(
-    const std::string& db_dir, const std::string& wal_dir,
-    const RestoreOptions& restore_options) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->RestoreDBFromLatestBackup(db_dir, wal_dir,
-                                                   restore_options);
-}
-
-Status RestoreBackupableDB::PurgeOldBackups(uint32_t num_backups_to_keep) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->PurgeOldBackups(num_backups_to_keep);
-}
-
-Status RestoreBackupableDB::DeleteBackup(BackupID backup_id) {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->DeleteBackup(backup_id);
-}
-
-Status RestoreBackupableDB::GarbageCollect() {
-  if (!status_.ok()) {
-    return status_;
-  }
-  return backup_engine_->GarbageCollect();
 }
 
 }  // namespace rocksdb

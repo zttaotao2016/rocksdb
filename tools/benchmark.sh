@@ -74,6 +74,7 @@ const_params="
   --level_compaction_dynamic_level_bytes=true \
   --bytes_per_sync=$((8 * M)) \
   --cache_index_and_filter_blocks=0 \
+  --pin_l0_filter_and_index_blocks_in_cache=1 \
   --benchmark_write_rate_limit=$(( 1024 * 1024 * $mb_written_per_sec )) \
   \
   --hard_rate_limit=3 \
@@ -504,7 +505,7 @@ for job in ${jobs[@]}; do
     echo "Complete $job in $((end-start)) seconds" | tee -a $schedule
   fi
 
-  echo -e "ops/sec\tmb/sec\tSize-GB\tL0_MB\tSum_GB\tW-Amp\tW-MB/s\tusec/op\tp50\tp75\tp99\tp99.9\tp99.99\tUptime\tStall-time\tStall%\tTest"
+  echo -e "ops/sec\tmb/sec\tSize-GB\tL0_GB\tSum_GB\tW-Amp\tW-MB/s\tusec/op\tp50\tp75\tp99\tp99.9\tp99.99\tUptime\tStall-time\tStall%\tTest"
   tail -1 $output_dir/report.txt
 
 done

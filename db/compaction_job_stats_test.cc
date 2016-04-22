@@ -624,7 +624,10 @@ CompressionType GetAnyCompression() {
     return kBZip2Compression;
   } else if (LZ4_Supported()) {
     return kLZ4Compression;
+  } else if (XPRESS_Supported()) {
+    return kXpressCompression;
   }
+
   return kNoCompression;
 }
 
@@ -660,7 +663,7 @@ TEST_P(CompactionJobStatsTest, CompactionJobStatsTest) {
   options.max_subcompactions = max_subcompactions_;
   options.bytes_per_sync = 512 * 1024;
 
-  options.compaction_measure_io_stats = true;
+  options.report_bg_io_stats = true;
   for (int test = 0; test < 2; ++test) {
     DestroyAndReopen(options);
     CreateAndReopenWithCF({"pikachu"}, options);

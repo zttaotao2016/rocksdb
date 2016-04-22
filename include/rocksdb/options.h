@@ -62,6 +62,7 @@ enum CompressionType : char {
   kBZip2Compression = 0x3,
   kLZ4Compression = 0x4,
   kLZ4HCCompression = 0x5,
+  kXpressCompression = 0x6,
   // zstd format is not finalized yet so it's subject to changes.
   kZSTDNotFinalCompression = 0x40,
 };
@@ -159,7 +160,15 @@ struct DbPath {
 struct Options;
 
 struct ColumnFamilyOptions {
+  // The function recovers options to a previous version. Only 4.6 or later
+  // versions are supported.
+  ColumnFamilyOptions* OldDefaults(int rocksdb_major_version = 4,
+                                   int rocksdb_minor_version = 6);
+
   // Some functions that make it easier to optimize RocksDB
+  // Use if if your DB is very small (like under 1GB) and you don't want to
+  // spend lots of memory for memtables.
+  ColumnFamilyOptions* OptimizeForSmallDb();
 
   // Use this if you don't need to keep the data sorted, i.e. you'll never use
   // an iterator, only Put() and Get() API calls
@@ -255,7 +264,7 @@ struct ColumnFamilyOptions {
   // Note that write_buffer_size is enforced per column family.
   // See db_write_buffer_size for sharing memory across column families.
   //
-  // Default: 4MB
+  // Default: 64MB
   //
   // Dynamically changeable through SetOptions() API
   size_t write_buffer_size;
@@ -275,7 +284,7 @@ struct ColumnFamilyOptions {
 
   // The minimum number of write buffers that will be merged together
   // before writing to storage.  If set to 1, then
-  // all write buffers are fushed to L0 as individual files and this increases
+  // all write buffers are flushed to L0 as individual files and this increases
   // read amplification because a get request has to check in all of these
   // files. Also, an in-memory merge may result in writing lesser
   // data to storage if there are duplicate records in each of these
@@ -401,7 +410,7 @@ struct ColumnFamilyOptions {
   // be 2MB, and each file on level 2 will be 20MB,
   // and each file on level-3 will be 200MB.
   //
-  // Default: 2MB.
+  // Default: 64MB.
   //
   // Dynamically changeable through SetOptions() API
   uint64_t target_file_size_base;
@@ -416,12 +425,12 @@ struct ColumnFamilyOptions {
   // max_bytes_for_level_base is the max total for level-1.
   // Maximum number of bytes for level L can be calculated as
   // (max_bytes_for_level_base) * (max_bytes_for_level_multiplier ^ (L-1))
-  // For example, if max_bytes_for_level_base is 20MB, and if
+  // For example, if max_bytes_for_level_base is 200MB, and if
   // max_bytes_for_level_multiplier is 10, total data size for level-1
-  // will be 20MB, total file size for level-2 will be 200MB,
-  // and total file size for level-3 will be 2GB.
+  // will be 2GB, total file size for level-2 will be 20GB,
+  // and total file size for level-3 will be 200GB.
   //
-  // Default: 10MB.
+  // Default: 256MB.
   //
   // Dynamically changeable through SetOptions() API
   uint64_t max_bytes_for_level_base;
@@ -539,13 +548,13 @@ struct ColumnFamilyOptions {
   // All writes will be slowed down to at least delayed_write_rate if estimated
   // bytes needed to be compaction exceed this threshold.
   //
-  // Default: 0 (disabled)
+  // Default: 64GB
   uint64_t soft_pending_compaction_bytes_limit;
 
   // All writes are stopped if estimated bytes needed to be compaction exceed
   // this threshold.
   //
-  // Default: 0 (disabled)
+  // Default: 256GB
   uint64_t hard_pending_compaction_bytes_limit;
 
   // DEPRECATED -- this options is no longer used
@@ -783,9 +792,9 @@ struct ColumnFamilyOptions {
   // Default: false
   bool paranoid_file_checks;
 
-  // Measure IO stats in compactions, if true.
+  // Measure IO stats in compactions and flushes, if true.
   // Default: false
-  bool compaction_measure_io_stats;
+  bool report_bg_io_stats;
 
   // Create ColumnFamilyOptions with default values for all fields
   ColumnFamilyOptions();
@@ -796,6 +805,10 @@ struct ColumnFamilyOptions {
 };
 
 struct DBOptions {
+  // The function recovers options to the option as in version 4.6.
+  DBOptions* OldDefaults(int rocksdb_major_version = 4,
+                         int rocksdb_minor_version = 6);
+
   // Some functions that make it easier to optimize RocksDB
 
 #ifndef ROCKSDB_LITE
@@ -838,10 +851,19 @@ struct DBOptions {
   // Default: nullptr
   std::shared_ptr<RateLimiter> rate_limiter;
 
-  // Use to track SST files and control their file deletion rate, can be used
-  // among multiple RocksDB instances, sst_file_manager only track and throttle
-  // deletes of SST files in first db_path (db_name if db_paths is empty), other
-  // files and other db_paths wont be tracked or affected by sst_file_manager.
+  // Use to track SST files and control their file deletion rate.
+  //
+  // Features:
+  //  - Throttle the deletion rate of the SST files.
+  //  - Keep track the total size of all SST files.
+  //  - Set a maximum allowed space limit for SST files that when reached
+  //    the DB wont do any further flushes or compactions and will set the
+  //    background error.
+  //  - Can be shared between multiple dbs.
+  // Limitations:
+  //  - Only track and throttle deletes of SST files in
+  //    first db_path (db_name if db_paths is empty).
+  //
   // Default: nullptr
   std::shared_ptr<SstFileManager> sst_file_manager;
 
@@ -1275,7 +1297,7 @@ struct DBOptions {
   // records, ignoring a particular record or skipping replay.
   // The filter is invoked at startup and is invoked from a single-thread
   // currently.
-  const WalFilter* wal_filter;
+  WalFilter* wal_filter;
 #endif  // ROCKSDB_LITE
 
   // If true, then DB::Open / CreateColumnFamily / DropColumnFamily
@@ -1294,6 +1316,10 @@ struct Options : public DBOptions, public ColumnFamilyOptions {
   Options(const DBOptions& db_options,
           const ColumnFamilyOptions& column_family_options)
       : DBOptions(db_options), ColumnFamilyOptions(column_family_options) {}
+
+  // The function recovers options to the option as in version 4.6.
+  Options* OldDefaults(int rocksdb_major_version = 4,
+                       int rocksdb_minor_version = 6);
 
   void Dump(Logger* log) const;
 

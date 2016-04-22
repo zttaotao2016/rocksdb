@@ -33,6 +33,7 @@ int main() {
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <thread>
@@ -228,8 +229,8 @@ DEFINE_int64(cache_size, 2LL * KB * KB * KB,
              "Number of bytes to use as a cache of uncompressed data.");
 
 DEFINE_uint64(subcompactions, 1,
-             "Maximum number of subcompactions to divide L0-L1 compactions "
-             "into.");
+              "Maximum number of subcompactions to divide L0-L1 compactions "
+              "into.");
 
 DEFINE_bool(allow_concurrent_memtable_write, true,
             "Allow multi-writers to update mem tables in parallel.");
@@ -302,6 +303,10 @@ DEFINE_uint64(max_bytes_for_level_base, 256 * KB, "Max bytes for level-1");
 DEFINE_int32(max_bytes_for_level_multiplier, 2,
              "A multiplier to compute max bytes for level-N (N >= 2)");
 
+DEFINE_int32(compact_files_one_in, 1000,
+             "If non-zero, then CompactFiles() will be called one for every N "
+             "operations IN AVERAGE.  0 indicates CompactFiles() is disabled.");
+
 static bool ValidateInt32Percent(const char* flagname, int32_t value) {
   if (value < 0 || value>100) {
     fprintf(stderr, "Invalid value for --%s: %d, 0<= pct <=100 \n",
@@ -310,6 +315,7 @@ static bool ValidateInt32Percent(const char* flagname, int32_t value) {
   }
   return true;
 }
+
 DEFINE_int32(readpercent, 10,
              "Ratio of reads to total workload (expressed as a percentage)");
 static const bool FLAGS_readpercent_dummy __attribute__((unused)) =
@@ -362,6 +368,8 @@ enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {
     return rocksdb::kLZ4Compression;
   else if (!strcasecmp(ctype, "lz4hc"))
     return rocksdb::kLZ4HCCompression;
+  else if (!strcasecmp(ctype, "xpress"))
+    return rocksdb::kXpressCompression;
   else if (!strcasecmp(ctype, "zstd"))
     return rocksdb::kZSTDNotFinalCompression;
 
@@ -465,11 +473,7 @@ static std::string Key(int64_t val) {
 
 static std::string StringToHex(const std::string& str) {
   std::string result = "0x";
-  char buf[10];
-  for (size_t i = 0; i < str.length(); i++) {
-    snprintf(buf, 10, "%02X", (unsigned char)str[i]);
-    result += buf;
-  }
+  result.append(Slice(str).ToString(true));
   return result;
 }
 
@@ -492,6 +496,8 @@ class Stats {
   long founds_;
   long iterations_;
   long errors_;
+  long num_compact_files_succeed_;
+  long num_compact_files_failed_;
   int next_report_;
   size_t bytes_;
   uint64_t last_op_finish_;
@@ -515,6 +521,8 @@ class Stats {
     errors_ = 0;
     bytes_ = 0;
     seconds_ = 0;
+    num_compact_files_succeed_ = 0;
+    num_compact_files_failed_ = 0;
     start_ = FLAGS_env->NowMicros();
     last_op_finish_ = start_;
     finish_ = start_;
@@ -534,6 +542,8 @@ class Stats {
     errors_ += other.errors_;
     bytes_ += other.bytes_;
     seconds_ += other.seconds_;
+    num_compact_files_succeed_ += other.num_compact_files_succeed_;
+    num_compact_files_failed_ += other.num_compact_files_failed_;
     if (other.start_ < start_) start_ = other.start_;
     if (other.finish_ > finish_) finish_ = other.finish_;
   }
@@ -598,6 +608,10 @@ class Stats {
     errors_ += n;
   }
 
+  void AddNumCompactFilesSucceed(int n) { num_compact_files_succeed_ += n; }
+
+  void AddNumCompactFilesFailed(int n) { num_compact_files_failed_ += n; }
+
   void Report(const char* name) {
     std::string extra;
     if (bytes_ < 1 || done_ < 1) {
@@ -626,6 +640,10 @@ class Stats {
             iterator_size_sums_);
     fprintf(stdout, "%-12s: Iterated %ld times\n", "", iterations_);
     fprintf(stdout, "%-12s: Got errors %ld times\n", "", errors_);
+    fprintf(stdout, "%-12s: %ld CompactFiles() succeed\n", "",
+            num_compact_files_succeed_);
+    fprintf(stdout, "%-12s: %ld CompactFiles() failed\n", "",
+            num_compact_files_failed_);
 
     if (FLAGS_histogram) {
       fprintf(stdout, "Microseconds per op:\n%s\n", hist_.ToString().c_str());
@@ -902,7 +920,7 @@ class DbStressListener : public EventListener {
     assert(IsValidColumnFamilyName(info.cf_name));
     VerifyFilePath(info.file_path);
     assert(info.file_size > 0);
-    assert(info.job_id > 0);
+    assert(info.job_id > 0 || FLAGS_compact_files_one_in > 0);
     assert(info.table_properties.data_size > 0);
     assert(info.table_properties.raw_key_size > 0);
     assert(info.table_properties.num_entries > 0);
@@ -1596,6 +1614,58 @@ class StressTest {
         }
       }
 
+#ifndef ROCKSDB_LITE  // Lite does not support GetColumnFamilyMetaData
+      if (FLAGS_compact_files_one_in > 0 &&
+          thread->rand.Uniform(FLAGS_compact_files_one_in) == 0) {
+        auto* random_cf =
+            column_families_[thread->rand.Next() % FLAGS_column_families];
+        rocksdb::ColumnFamilyMetaData cf_meta_data;
+        db_->GetColumnFamilyMetaData(random_cf, &cf_meta_data);
+
+        // Randomly compact up to three consecutive files from a level
+        const int kMaxRetry = 3;
+        for (int attempt = 0; attempt < kMaxRetry; ++attempt) {
+          size_t random_level = thread->rand.Uniform(
+              static_cast<int>(cf_meta_data.levels.size()));
+
+          const auto& files = cf_meta_data.levels[random_level].files;
+          if (files.size() > 0) {
+            size_t random_file_index =
+                thread->rand.Uniform(static_cast<int>(files.size()));
+            if (files[random_file_index].being_compacted) {
+              // Retry as the selected file is currently being compacted
+              continue;
+            }
+
+            std::vector<std::string> input_files;
+            input_files.push_back(files[random_file_index].name);
+            if (random_file_index > 0 &&
+                !files[random_file_index - 1].being_compacted) {
+              input_files.push_back(files[random_file_index - 1].name);
+            }
+            if (random_file_index + 1 < files.size() &&
+                !files[random_file_index + 1].being_compacted) {
+              input_files.push_back(files[random_file_index + 1].name);
+            }
+
+            size_t output_level =
+                std::min(random_level + 1, cf_meta_data.levels.size() - 1);
+            auto s =
+                db_->CompactFiles(CompactionOptions(), random_cf, input_files,
+                                  static_cast<int>(output_level));
+            if (!s.ok()) {
+              printf("Unable to perform CompactFiles(): %s\n",
+                     s.ToString().c_str());
+              thread->stats.AddNumCompactFilesFailed(1);
+            } else {
+              thread->stats.AddNumCompactFilesSucceed(1);
+            }
+            break;
+          }
+        }
+      }
+#endif                // !ROCKSDB_LITE
+
       long rand_key = thread->rand.Next() % max_key;
       int rand_column_family = thread->rand.Next() % FLAGS_column_families;
       std::string keystr = Key(rand_key);
@@ -1933,6 +2003,8 @@ class StressTest {
             1 << FLAGS_log2_keys_per_lock);
     std::string compression = CompressionTypeToString(FLAGS_compression_type_e);
     fprintf(stdout, "Compression               : %s\n", compression.c_str());
+    fprintf(stdout, "Max subcompactions        : %" PRIu64 "\n",
+            FLAGS_subcompactions);
 
     const char* memtablerep = "";
     switch (FLAGS_rep_factory) {

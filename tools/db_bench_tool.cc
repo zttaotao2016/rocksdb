@@ -349,6 +349,9 @@ DEFINE_int64(cache_size, -1, "Number of bytes to use as a cache of uncompressed"
 DEFINE_bool(cache_index_and_filter_blocks, false,
             "Cache index/filter blocks in block cache.");
 
+DEFINE_bool(pin_l0_filter_and_index_blocks_in_cache, false,
+            "Pin index/filter blocks of L0 files in block cache.");
+
 DEFINE_int32(block_size,
              static_cast<int32_t>(rocksdb::BlockBasedTableOptions().block_size),
              "Number of bytes in a block.");
@@ -522,7 +525,7 @@ DEFINE_uint64(transaction_lock_timeout, 100,
               " milliseconds before failing a transaction waiting on a lock");
 #endif  // ROCKSDB_LITE
 
-DEFINE_bool(compaction_measure_io_stats, false,
+DEFINE_bool(report_bg_io_stats, false,
             "Measure times spents on I/Os while in compactions. ");
 
 // Tiered cache related changes
@@ -550,6 +553,8 @@ enum rocksdb::CompressionType StringToCompressionType(const char* ctype) {
     return rocksdb::kLZ4Compression;
   else if (!strcasecmp(ctype, "lz4hc"))
     return rocksdb::kLZ4HCCompression;
+  else if (!strcasecmp(ctype, "xpress"))
+    return rocksdb::kXpressCompression;
   else if (!strcasecmp(ctype, "zstd"))
     return rocksdb::kZSTDNotFinalCompression;
 
@@ -1625,6 +1630,10 @@ class Benchmark {
         ok = LZ4HC_Compress(Options().compression_opts, 2, input.data(),
                             input.size(), compressed);
         break;
+      case rocksdb::kXpressCompression:
+        ok = XPRESS_Compress(input.data(),
+          input.size(), compressed);
+        break;
       case rocksdb::kZSTDNotFinalCompression:
         ok = ZSTD_Compress(Options().compression_opts, input.data(),
                            input.size(), compressed);
@@ -1735,7 +1744,7 @@ class Benchmark {
 #endif
 
   void PrintEnvironment() {
-    fprintf(stderr, "LevelDB:    version %d.%d\n",
+    fprintf(stderr, "RocksDB:    version %d.%d\n",
             kMajorVersion, kMinorVersion);
 
 #if defined(__linux)
@@ -2343,6 +2352,11 @@ class Benchmark {
                                       &decompress_size, 2);
         ok = uncompressed != nullptr;
         break;
+      case rocksdb::kXpressCompression:
+        uncompressed = XPRESS_Uncompress(compressed.data(), compressed.size(),
+          &decompress_size);
+        ok = uncompressed != nullptr;
+        break;
       case rocksdb::kZSTDNotFinalCompression:
         uncompressed = ZSTD_Uncompress(compressed.data(), compressed.size(),
                                        &decompress_size);
@@ -2538,6 +2552,8 @@ class Benchmark {
       }
       block_based_options.cache_index_and_filter_blocks =
           FLAGS_cache_index_and_filter_blocks;
+      block_based_options.pin_l0_filter_and_index_blocks_in_cache =
+          FLAGS_pin_l0_filter_and_index_blocks_in_cache;
       block_based_options.block_cache = cache_;
       block_based_options.page_cache = page_cache_;
       block_based_options.block_cache_compressed = compressed_cache_;
@@ -2622,7 +2638,7 @@ class Benchmark {
       exit(1);
     }
     options.max_successive_merges = FLAGS_max_successive_merges;
-    options.compaction_measure_io_stats = FLAGS_compaction_measure_io_stats;
+    options.report_bg_io_stats = FLAGS_report_bg_io_stats;
 
     // set universal style compaction configurations, if applicable
     if (FLAGS_universal_size_ratio != 0) {

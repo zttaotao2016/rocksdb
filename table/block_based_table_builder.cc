@@ -26,6 +26,7 @@
 #include "rocksdb/env.h"
 #include "rocksdb/filter_policy.h"
 #include "rocksdb/flush_block_policy.h"
+#include "rocksdb/merge_operator.h"
 #include "rocksdb/table.h"
 
 #include "table/block.h"
@@ -366,6 +367,13 @@ Slice CompressBlock(const Slice& raw,
         return *compressed_output;
       }
       break;     // fall back to no compression.
+    case kXpressCompression:
+      if (XPRESS_Compress(raw.data(), raw.size(),
+          compressed_output) &&
+          GoodCompressionRatio(compressed_output->size(), raw.size())) {
+        return *compressed_output;
+      }
+      break;
     case kZSTDNotFinalCompression:
       if (ZSTD_Compress(compression_options, raw.data(), raw.size(),
                         compressed_output) &&
@@ -472,6 +480,8 @@ struct BlockBasedTableBuilder::Rep {
 
   std::string compressed_output;
   std::unique_ptr<FlushBlockPolicy> flush_block_policy;
+  uint32_t column_family_id;
+  const std::string& column_family_name;
 
   std::vector<std::unique_ptr<IntTblPropCollector>> table_properties_collectors;
 
@@ -480,9 +490,10 @@ struct BlockBasedTableBuilder::Rep {
       const InternalKeyComparator& icomparator,
       const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
           int_tbl_prop_collector_factories,
-      uint32_t column_family_id, WritableFileWriter* f,
+      uint32_t _column_family_id, WritableFileWriter* f,
       const CompressionType _compression_type,
-      const CompressionOptions& _compression_opts, const bool skip_filters)
+      const CompressionOptions& _compression_opts, const bool skip_filters,
+      const std::string& _column_family_name)
       : ioptions(_ioptions),
         table_options(table_opt),
         internal_comparator(icomparator),
@@ -500,7 +511,9 @@ struct BlockBasedTableBuilder::Rep {
                                                   _ioptions, table_options)),
         flush_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                table_options, data_block)) {
+                table_options, data_block)),
+        column_family_id(_column_family_id),
+        column_family_name(_column_family_name) {
     for (auto& collector_factories : *int_tbl_prop_collector_factories) {
       table_properties_collectors.emplace_back(
           collector_factories->CreateIntTblPropCollector(column_family_id));
@@ -520,7 +533,8 @@ BlockBasedTableBuilder::BlockBasedTableBuilder(
         int_tbl_prop_collector_factories,
     uint32_t column_family_id, WritableFileWriter* file,
     const CompressionType compression_type,
-    const CompressionOptions& compression_opts, const bool skip_filters) {
+    const CompressionOptions& compression_opts, const bool skip_filters,
+    const std::string& column_family_name) {
   BlockBasedTableOptions sanitized_table_options(table_options);
   if (sanitized_table_options.format_version == 0 &&
       sanitized_table_options.checksum != kCRC32c) {
@@ -534,7 +548,8 @@ BlockBasedTableBuilder::BlockBasedTableBuilder(
 
   rep_ = new Rep(ioptions, sanitized_table_options, internal_comparator,
                  int_tbl_prop_collector_factories, column_family_id, file,
-                 compression_type, compression_opts, skip_filters);
+                 compression_type, compression_opts, skip_filters,
+                 column_family_name);
 
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
@@ -790,10 +805,31 @@ Status BlockBasedTableBuilder::Finish() {
     // Write properties block.
     {
       PropertyBlockBuilder property_block_builder;
+      r->props.column_family_id = r->column_family_id;
+      r->props.column_family_name = r->column_family_name;
       r->props.filter_policy_name = r->table_options.filter_policy != nullptr ?
           r->table_options.filter_policy->Name() : "";
       r->props.index_size =
           r->index_builder->EstimatedSize() + kBlockTrailerSize;
+      r->props.comparator_name = r->ioptions.comparator != nullptr
+                                     ? r->ioptions.comparator->Name()
+                                     : "nullptr";
+      r->props.merge_operator_name = r->ioptions.merge_operator != nullptr
+                                         ? r->ioptions.merge_operator->Name()
+                                         : "nullptr";
+
+      std::string property_collectors_names = "[";
+      property_collectors_names = "[";
+      for (size_t i = 0;
+           i < r->ioptions.table_properties_collector_factories.size(); ++i) {
+        if (i != 0) {
+          property_collectors_names += ",";
+        }
+        property_collectors_names +=
+            r->ioptions.table_properties_collector_factories[i]->Name();
+      }
+      property_collectors_names += "]";
+      r->props.property_collectors_names = property_collectors_names;
 
       // Add basic properties
       property_block_builder.AddTableProperty(r->props);

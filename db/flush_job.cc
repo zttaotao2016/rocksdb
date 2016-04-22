@@ -66,7 +66,7 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
                    JobContext* job_context, LogBuffer* log_buffer,
                    Directory* db_directory, Directory* output_file_directory,
                    CompressionType output_compression, Statistics* stats,
-                   EventLogger* event_logger)
+                   EventLogger* event_logger, bool measure_io_stats)
     : dbname_(dbname),
       cfd_(cfd),
       db_options_(db_options),
@@ -83,7 +83,8 @@ FlushJob::FlushJob(const std::string& dbname, ColumnFamilyData* cfd,
       output_file_directory_(output_file_directory),
       output_compression_(output_compression),
       stats_(stats),
-      event_logger_(event_logger) {
+      event_logger_(event_logger),
+      measure_io_stats_(measure_io_stats) {
   // Update the thread status to indicate flush.
   ReportStartedFlush();
   TEST_SYNC_POINT("FlushJob::FlushJob()");
@@ -121,6 +122,21 @@ void FlushJob::RecordFlushIOStats() {
 Status FlushJob::Run(FileMetaData* file_meta) {
   AutoThreadOperationStageUpdater stage_run(
       ThreadStatus::STAGE_FLUSH_RUN);
+  // I/O measurement variables
+  PerfLevel prev_perf_level = PerfLevel::kEnableTime;
+  uint64_t prev_write_nanos = 0;
+  uint64_t prev_fsync_nanos = 0;
+  uint64_t prev_range_sync_nanos = 0;
+  uint64_t prev_prepare_write_nanos = 0;
+  if (measure_io_stats_) {
+    prev_perf_level = GetPerfLevel();
+    SetPerfLevel(PerfLevel::kEnableTime);
+    prev_write_nanos = IOSTATS(write_nanos);
+    prev_fsync_nanos = IOSTATS(fsync_nanos);
+    prev_range_sync_nanos = IOSTATS(range_sync_nanos);
+    prev_prepare_write_nanos = IOSTATS(prepare_write_nanos);
+  }
+
   // Save the contents of the earliest memtable as a new Table
   FileMetaData meta;
   autovector<MemTable*> mems;
@@ -180,6 +196,18 @@ Status FlushJob::Run(FileMetaData* file_meta) {
   }
   stream.EndArray();
 
+  if (measure_io_stats_) {
+    if (prev_perf_level != PerfLevel::kEnableTime) {
+      SetPerfLevel(prev_perf_level);
+    }
+    stream << "file_write_nanos" << (IOSTATS(write_nanos) - prev_write_nanos);
+    stream << "file_range_sync_nanos"
+           << (IOSTATS(range_sync_nanos) - prev_range_sync_nanos);
+    stream << "file_fsync_nanos" << (IOSTATS(fsync_nanos) - prev_fsync_nanos);
+    stream << "file_prepare_write_nanos"
+           << (IOSTATS(prepare_write_nanos) - prev_prepare_write_nanos);
+  }
+
   return s;
 }
 
@@ -234,14 +262,15 @@ Status FlushJob::WriteLevel0Table(const autovector<MemTable*>& mems,
 
       TEST_SYNC_POINT_CALLBACK("FlushJob::WriteLevel0Table:output_compression",
                                &output_compression_);
-      s = BuildTable(dbname_, db_options_.env, *cfd_->ioptions(), env_options_,
-                     cfd_->table_cache(), iter.get(), meta,
-                     cfd_->internal_comparator(),
-                     cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
-                     existing_snapshots_, earliest_write_conflict_snapshot_,
-                     output_compression_, cfd_->ioptions()->compression_opts,
-                     mutable_cf_options_.paranoid_file_checks,
-                     cfd_->internal_stats(), Env::IO_HIGH, &table_properties_);
+      s = BuildTable(
+          dbname_, db_options_.env, *cfd_->ioptions(), env_options_,
+          cfd_->table_cache(), iter.get(), meta, cfd_->internal_comparator(),
+          cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
+          cfd_->GetName(), existing_snapshots_,
+          earliest_write_conflict_snapshot_, output_compression_,
+          cfd_->ioptions()->compression_opts,
+          mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
+          Env::IO_HIGH, &table_properties_, 0 /* level */);
       info.table_properties = table_properties_;
       LogFlush(db_options_.info_log);
     }
@@ -299,7 +328,7 @@ Status FlushJob::WriteLevel0Table(const autovector<MemTable*>& mems,
   cfd_->internal_stats()->AddCompactionStats(0 /* level */, stats);
   cfd_->internal_stats()->AddCFStats(InternalStats::BYTES_FLUSHED,
                                      meta->fd.GetFileSize());
-  RecordTick(stats_, COMPACT_WRITE_BYTES, meta->fd.GetFileSize());
+  RecordTick(stats_, FLUSH_WRITE_BYTES, meta->fd.GetFileSize());
   return s;
 }
 
