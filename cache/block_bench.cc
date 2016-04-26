@@ -5,9 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <gflags/gflags.h>
-#include <cache/cache_util.h>
-#include <util/histogram.h>
 
+#include "cache/cache_util.h"
+#include "util/histogram.h"
 
 using namespace std;
 

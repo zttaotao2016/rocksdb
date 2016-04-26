@@ -25,7 +25,6 @@
 #include <memory>
 #include <stdint.h>
 #include "rocksdb/slice.h"
-#include "table/block.h"
 #include "rocksdb/status.h"
 
 namespace rocksdb {

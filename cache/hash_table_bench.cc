@@ -13,8 +13,10 @@
 #include <string>
 #include <unordered_map>
 
-#include "cache/hash_table.h"
 #include "rocksdb/env.h"
+
+#include "cache/hash_table.h"
+
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
 
