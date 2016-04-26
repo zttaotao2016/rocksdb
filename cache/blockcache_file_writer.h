@@ -4,8 +4,8 @@
 #include <memory>
 #include <thread>
 
+#include "rocksdb/env.h"
 #include "cache/cache_util.h"
-#include "include/rocksdb/env.h"
 
 namespace rocksdb {
 

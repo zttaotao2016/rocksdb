@@ -8,9 +8,9 @@
 #include <thread>
 #include <sstream>
 
-#include "include/rocksdb/comparator.h"
-#include "include/rocksdb/cache_tier.h"
-#include "include/rocksdb/cache.h"
+#include "rocksdb/comparator.h"
+#include "rocksdb/cache_tier.h"
+#include "rocksdb/cache.h"
 
 #include "cache/blockcache_file.h"
 #include "cache/blockcache_metadata.h"

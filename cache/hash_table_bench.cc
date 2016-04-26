@@ -14,7 +14,7 @@
 #include <unordered_map>
 
 #include "cache/hash_table.h"
-#include "include/rocksdb/env.h"
+#include "rocksdb/env.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
 

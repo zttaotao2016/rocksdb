@@ -10,7 +10,7 @@
 #include <list>
 #include <vector>
 
-#include "include/rocksdb/env.h"
+#include "rocksdb/env.h"
 #include "port/port_posix.h"
 #include "util/mutexlock.h"
 

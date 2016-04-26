@@ -12,7 +12,7 @@
 #include <functional>
 #include <memory>
 
-#include "include/rocksdb/cache.h"
+#include "rocksdb/cache.h"
 #include "cache/blockcache.h"
 #include "cache/cache_volatile.h"
 #include "cache/cache_util.h"

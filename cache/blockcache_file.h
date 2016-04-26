@@ -4,9 +4,9 @@
 #include <memory>
 #include <string>
 
-#include "include/rocksdb/comparator.h"
-#include "include/rocksdb/env.h"
-#include "include/rocksdb/cache_tier.h"
+#include "rocksdb/comparator.h"
+#include "rocksdb/env.h"
+#include "rocksdb/cache_tier.h"
 
 #include "cache/blockcache_alloc.h"
 #include "cache/lrulist.h"
