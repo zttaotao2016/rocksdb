@@ -60,27 +60,39 @@ class BlockCacheImpl : public CacheTier {
 
   std::string PrintStats() override {
     std::ostringstream os;
-    os << "pagecache.blockcache.bytes_piplined: "
+    os << "persistentcache.blockcache.total_reads_time_microsec: "
+       << stats_.total_cache_reads_time_microsec_ << std::endl
+       << "persistentcache.blockcache.total_reads_bytes: "
+       << stats_.total_cache_reads_bytes_ << std::endl
+       << "persistentcache.blockcache.total_reads: "
+       << stats_.total_cache_reads_ << std::endl
+       << "persistentcache.blockcache.total_writes_time_microsec: "
+       << stats_.total_cache_writes_time_microsec_ << std::endl
+       << "persistentcache.blockcache.total_writes_bytes: "
+       << stats_.total_cache_writes_bytes_ << std::endl
+       << "persistentcache.blockcache.total_writes: "
+       << stats_.total_cache_writes_ << std::endl
+       << "persistentcache.blockcache.bytes_piplined: "
        << stats_.bytes_pipelined_.ToString() << std::endl
-       << "pagecache.blockcache.bytes_written: "
+       << "persistentcache.blockcache.bytes_written: "
        << stats_.bytes_written_.ToString() << std::endl
-       << "pagecache.blockcache.bytes_read: "
+       << "persistentcache.blockcache.bytes_read: "
        << stats_.bytes_read_.ToString() << std::endl
-       << "pagecache.blockcache.cache_hits: "
+       << "persistentcache.blockcache.cache_hits: "
        << stats_.cache_hits_ << std::endl
-       << "pagecache.blockcache.cache_misses: "
+       << "persistentcache.blockcache.cache_misses: "
        << stats_.cache_misses_ << std::endl
-       << "pagecache.blockcache.cache_errors: "
+       << "persistentcache.blockcache.cache_errors: "
        << stats_.cache_errors_ << std::endl
-       << "pagecache.blockcache.cache_hits_pct: "
+       << "persistentcache.blockcache.cache_hits_pct: "
        << stats_.CacheHitPct() << std::endl
-       << "pagecache.blockcache.cache_misses_pct: "
+       << "persistentcache.blockcache.cache_misses_pct: "
        << stats_.CacheMissPct() << std::endl
-       << "pagecache.blockcache.read_hit_latency: "
+       << "persistentcache.blockcache.read_hit_latency: "
        << stats_.read_hit_latency_.ToString() << std::endl
-       << "pagecache.blockcache.read_miss_latency: "
+       << "persistentcache.blockcache.read_miss_latency: "
        << stats_.read_miss_latency_.ToString() << std::endl
-       << "pagecache.blockcache.write_latency: "
+       << "persistentcache.blockcache.write_latency: "
        << stats_.write_latency_.ToString() << std::endl
        << CacheTier::PrintStats();
     return os.str();
@@ -133,6 +145,12 @@ class BlockCacheImpl : public CacheTier {
     HistogramImpl read_hit_latency_;
     HistogramImpl read_miss_latency_;
     HistogramImpl write_latency_;
+    uint64_t total_cache_reads_ = 0;
+    uint64_t total_cache_writes_ = 0;
+    uint64_t total_cache_reads_time_microsec_ = 0;
+    uint64_t total_cache_writes_time_microsec_ = 0;
+    uint64_t total_cache_reads_bytes_ = 0;
+    uint64_t total_cache_writes_bytes_ = 0;
     uint64_t cache_hits_ = 0;
     uint64_t cache_misses_ = 0;
     uint64_t cache_errors_ = 0;

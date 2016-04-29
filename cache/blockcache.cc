@@ -130,6 +130,9 @@ Status BlockCacheImpl::InsertImpl(const Slice& key,
   assert(status);
 
   // update stats
+  stats_.total_cache_writes_time_microsec_ += timer.ElapsedMicroSec();
+  stats_.total_cache_writes_++;
+  stats_.total_cache_writes_bytes_ += size;
   stats_.bytes_written_.Add(size);
   stats_.write_latency_.Add(timer.ElapsedMicroSec());
 
@@ -181,6 +184,9 @@ Status BlockCacheImpl::Lookup(const Slice& key, unique_ptr<char[]>* val,
   memcpy(val->get(), blk_val.data(), blk_val.size());
   *size = blk_val.size();
 
+  stats_.total_cache_reads_time_microsec_ += timer.ElapsedMicroSec();
+  stats_.total_cache_reads_++;
+  stats_.total_cache_reads_bytes_ += *size;
   stats_.bytes_read_.Add(*size);
   stats_.cache_hits_++;
   stats_.read_hit_latency_.Add(timer.ElapsedMicroSec());
