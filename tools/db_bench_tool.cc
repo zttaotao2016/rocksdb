@@ -4070,8 +4070,15 @@ int db_bench_tool(int argc, char** argv) {
     if (FLAGS_enable_persistent_cache_raw_mode) {
       impl->EnableRawCache();
     }
+
+    // open database
     s = impl->Open();
     assert(s.ok());
+    if (!s.ok()) {
+      fprintf(stderr, "Error opening persistent cache. %s \n",
+              s.ToString().c_str());
+      abort();
+    }
     // attach
     page_cache.reset(impl);
   }
