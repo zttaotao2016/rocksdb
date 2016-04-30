@@ -53,7 +53,7 @@ std::unique_ptr<CacheTier> NewBlockCache() {
   BlockCacheOptions opt(env, FLAGS_path, FLAGS_cache_size, log);
   opt.writer_dispatch_size = FLAGS_writer_iosize;
   opt.writer_qdepth = FLAGS_writer_qdepth;
-  opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
+  opt.pipeline_writes = FLAGS_enable_pipelined_writes;
   opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   std::unique_ptr<CacheTier> cache(new BlockCacheImpl(opt));
   status = cache->Open();
@@ -66,7 +66,7 @@ std::unique_ptr<TieredCache> NewTieredCache() {
   BlockCacheOptions opt(env, FLAGS_path, (1 - pct) * FLAGS_cache_size, log);
   opt.writer_dispatch_size = FLAGS_writer_iosize;
   opt.writer_qdepth = FLAGS_writer_qdepth;
-  opt.pipeline_writes_ = FLAGS_enable_pipelined_writes;
+  opt.pipeline_writes = FLAGS_enable_pipelined_writes;
   opt.max_write_pipeline_backlog_size = std::numeric_limits<uint64_t>::max();
   return std::move(TieredCache::New(FLAGS_cache_size * pct, opt));
 }

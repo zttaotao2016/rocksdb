@@ -4052,6 +4052,13 @@ int db_bench_tool(int argc, char** argv) {
     rocksdb::Status s = FLAGS_env->NewLogger(FLAGS_persistent_cache_path
                                              + "/LOG", &log);
     assert(s.ok());
+    if (!s.ok()) {
+      fprintf(stderr, "Error opening log. %s", s.ToString().c_str());
+      abort();
+    }
+
+    log->SetInfoLogLevel(InfoLogLevel::INFO_LEVEL);
+
     // fix env
     if (FLAGS_configure_persistent_cache_ssd) {
       cache_env.reset();

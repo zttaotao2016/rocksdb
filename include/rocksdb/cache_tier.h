@@ -1,6 +1,6 @@
 #pragma once
 
-#include <iostream>
+#include <sstream>
 #include <list>
 #include <limits>
 
@@ -24,6 +24,21 @@ struct BlockCacheOptions {
     log = _log;
     cache_size = _cache_size;
     writer_dispatch_size = write_buffer_size = _write_buffer_size;
+  }
+
+  const std::string ToString() const {
+    std::ostringstream ss;
+    ss << "BlockCacheOptions: " << std::endl
+       << "cache_size: " << cache_size << " B" << std::endl
+       << "cache_file_size: " << cache_file_size << " B" << std::endl
+       << "writer_qdepth: " << writer_qdepth << std::endl
+       << "pipelined_writes: " << pipeline_writes << std::endl
+       << "max_write_pipeline_backlog_size: "
+       << max_write_pipeline_backlog_size << " B" << std::endl
+       << "write_buffer_size: " << write_buffer_size << " B" << std::endl
+       << "write_buffer_count: " << write_buffer_count() << std::endl
+       << "writer_dispatch_size: " << writer_dispatch_size << " B" << std::endl;
+    return ss.str();
   }
 
   //
@@ -82,7 +97,7 @@ struct BlockCacheOptions {
 
   // Pipeline writes. The write will be delayed and asynchronous. This helps
   // avoid regression in the eviction code path of the primary tier
-  bool pipeline_writes_ = true;
+  bool pipeline_writes = true;
 
    // Max pipeline buffer size. This is the maximum backlog we can accumulate
    // while waiting for writes.

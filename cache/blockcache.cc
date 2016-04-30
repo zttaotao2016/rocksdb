@@ -12,6 +12,9 @@ Status BlockCacheImpl::Open() {
 
   WriteLock _(&lock_);
 
+  Info(opt_.log, "Opening persistent cache. %s \n", opt_.ToString().c_str());
+  opt_.log->Flush();
+
   assert(!size_);
 
   // Check the validity of the options
@@ -68,14 +71,14 @@ Status BlockCacheImpl::Insert(const Slice& key, const void* data,
   std::unique_ptr<char[]> tmp(new char[size]);
   memcpy(tmp.get(), data, size);
 
-  if (opt_.pipeline_writes_) {
+  if (opt_.pipeline_writes) {
     // off load the write to the write thread
     insert_ops_.Push(InsertOp(std::move(key.ToString()), std::move(tmp), size));
     assert(!tmp);
     return Status::OK();
   }
 
-  assert(!opt_.pipeline_writes_);
+  assert(!opt_.pipeline_writes);
   return InsertImpl(key, tmp, size);
 }
 
