@@ -4061,10 +4061,13 @@ int db_bench_tool(int argc, char** argv) {
 
     // fix env
     if (FLAGS_configure_persistent_cache_ssd) {
-      cache_env.reset();
+      const bool direct_reads = true;
+      const bool direct_writes = false;
+      cache_env.reset(new rocksdb::DirectIOEnv(rocksdb::Env::Default(),
+                                               direct_reads, direct_writes));
     }
     // create options
-    rocksdb::BlockCacheOptions opt(cache_env ? cache_env.get() : Env::Default(),
+    rocksdb::BlockCacheOptions opt(cache_env.get(),
                                    FLAGS_persistent_cache_path,
                                    FLAGS_persistent_cache_size, log);
 

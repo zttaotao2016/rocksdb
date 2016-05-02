@@ -381,8 +381,10 @@ class DirectIORandomAccessFile : public RandomAccessFile {
 //
 class DirectIOEnv : public EnvWrapper {
 public:
-  explicit DirectIOEnv(Env* env, const bool direct_read = true)
-    : EnvWrapper(env), direct_read_(direct_read) {}
+  explicit DirectIOEnv(Env* env, const bool direct_read = true,
+                       const bool direct_writes = true)
+    : EnvWrapper(env), direct_read_(direct_read),
+      direct_writes_(direct_writes) {}
 
   virtual ~DirectIOEnv() {}
 
@@ -421,17 +423,22 @@ public:
   virtual Status NewWritableFile(const std::string& fname,
                                  unique_ptr<WritableFile>* result,
                                  const EnvOptions& options) {
-    std::unique_ptr<DirectIOWritableFile> file(
-      new DirectIOWritableFile(fname));
-    Status s = file->Open();
-    if (s.ok()) {
-      *result = std::move(file);
+    if (direct_writes_) {
+      std::unique_ptr<DirectIOWritableFile> file(
+        new DirectIOWritableFile(fname));
+      Status s = file->Open();
+      if (s.ok()) {
+        *result = std::move(file);
+      }
+      return s;
+    } else {
+      return target()->NewWritableFile(fname, result, options);
     }
-    return s;
   }
 
 private:
   const bool direct_read_ = true;
+  const bool direct_writes_ = true;
 };
 
 }
