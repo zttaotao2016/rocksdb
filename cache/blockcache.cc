@@ -65,6 +65,8 @@ Status BlockCacheImpl::Close() {
 
 Status BlockCacheImpl::Insert(const Slice& key, const void* data,
                               const size_t size) {
+  Timer timer;
+
   // update stats
   stats_.bytes_pipelined_.Add(size);
 
@@ -75,6 +77,7 @@ Status BlockCacheImpl::Insert(const Slice& key, const void* data,
     // off load the write to the write thread
     insert_ops_.Push(InsertOp(std::move(key.ToString()), std::move(tmp), size));
     assert(!tmp);
+    stats_.pipeline_latency_.Add(timer.ElapsedMicroSec());
     return Status::OK();
   }
 

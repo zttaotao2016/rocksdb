@@ -94,6 +94,8 @@ class BlockCacheImpl : public CacheTier {
        << stats_.read_miss_latency_.ToString() << std::endl
        << "persistentcache.blockcache.write_latency: "
        << stats_.write_latency_.ToString() << std::endl
+       << "persistentcache.blockcache.pipeline_latency: "
+       << stats_.pipeline_latency_.ToString() << std::endl
        << CacheTier::PrintStats();
     return os.str();
   }
@@ -145,6 +147,7 @@ class BlockCacheImpl : public CacheTier {
     HistogramImpl read_hit_latency_;
     HistogramImpl read_miss_latency_;
     HistogramImpl write_latency_;
+    HistogramImpl pipeline_latency_;
     uint64_t total_cache_reads_ = 0;
     uint64_t total_cache_writes_ = 0;
     uint64_t total_cache_reads_time_microsec_ = 0;
