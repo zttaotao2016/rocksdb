@@ -242,14 +242,12 @@ class ChrootEnv : public EnvWrapper {
     std::pair<Status, std::string> res;
     res.second = chroot_dir_ + path;
     char* normalized_path = realpath(res.second.c_str(), nullptr);
-    if (normalized_path != nullptr) {
-      std::cout << normalized_path << std::endl;
-    }
     if (normalized_path == nullptr) {
       res.first = Status::NotFound(res.second, strerror(errno));
     } else if (strlen(normalized_path) < chroot_dir_.size() ||
                strncmp(normalized_path, chroot_dir_.c_str(),
                        chroot_dir_.size()) != 0) {
+      std::cerr << normalized_path << std::endl;
       res.first = Status::IOError(res.second,
                                   "Attempted to access path outside chroot");
     } else {
