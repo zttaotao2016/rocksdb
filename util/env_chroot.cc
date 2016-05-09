@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -241,6 +242,9 @@ class ChrootEnv : public EnvWrapper {
     std::pair<Status, std::string> res;
     res.second = chroot_dir_ + path;
     char* normalized_path = realpath(res.second.c_str(), nullptr);
+    if (normalized_path != nullptr) {
+      std::cout << normalized_path << std::endl;
+    }
     if (normalized_path == nullptr) {
       res.first = Status::NotFound(res.second, strerror(errno));
     } else if (strlen(normalized_path) < chroot_dir_.size() ||
