@@ -7,7 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#if !defined(ROCKSDB_LITE) && !defined(OS_WIN)
+#ifndef ROCKSDB_LITE
 
 #include <algorithm>
 #include <string>
@@ -427,19 +427,26 @@ class BackupableDBTest : public testing::Test {
  public:
   BackupableDBTest() {
     // set up files
-    std::string db_chroot = test::TmpDir() + "/backupable_db";
-    std::string backup_chroot = test::TmpDir() + "/backupable_db_backup";
-    Env::Default()->CreateDir(db_chroot);
-    Env::Default()->CreateDir(backup_chroot);
+    std::string db_dir = test::TmpDir() + "/backupable_db";
+    std::string backup_dir = test::TmpDir() + "/backupable_db_backup";
+
+#ifdef OS_WIN
+    dbname_ = test::TmpDir() + "/backupable_db";
+    backupdir_ = test::TmpDir() + "/backupable_db_backup";
+    db_env_.reset(NewChrootEnv(Env::Default(), db_dir));
+    backup_env_.reset(NewChrootEnv(Env::Default(), backup_dir));
+#else  // OS_WIN
     dbname_ = "/tempdb";
     backupdir_ = "/tempbk";
+    Env::Default()->CreateDir(db_dir);
+    Env::Default()->CreateDir(backup_dir);
+    db_env_.reset(NewChrootEnv(Env::Default(), db_dir));
+    backup_env_.reset(NewChrootEnv(Env::Default(), backup_dir));
+#endif  // OS_WIN
 
-    // set up envs
-    db_chroot_env_.reset(NewChrootEnv(Env::Default(), db_chroot));
-    backup_chroot_env_.reset(NewChrootEnv(Env::Default(), backup_chroot));
-    test_db_env_.reset(new TestEnv(db_chroot_env_.get()));
-    test_backup_env_.reset(new TestEnv(backup_chroot_env_.get()));
-    file_manager_.reset(new FileManager(backup_chroot_env_.get()));
+    test_db_env_.reset(new TestEnv(db_env_.get()));
+    test_backup_env_.reset(new TestEnv(backup_env_.get()));
+    file_manager_.reset(new FileManager(backup_env_.get()));
 
     // set up db options
     options_.create_if_missing = true;
@@ -450,7 +457,7 @@ class BackupableDBTest : public testing::Test {
 
     // Create logger
     DBOptions logger_options;
-    logger_options.env = db_chroot_env_.get();
+    logger_options.env = db_env_.get();
     CreateLoggerFromOptions(dbname_, logger_options, &logger_);
 
     // set up backup db options
@@ -550,13 +557,13 @@ class BackupableDBTest : public testing::Test {
 
   void DeleteLogFiles() {
     std::vector<std::string> delete_logs;
-    db_chroot_env_->GetChildren(dbname_, &delete_logs);
+    db_env_->GetChildren(dbname_, &delete_logs);
     for (auto f : delete_logs) {
       uint64_t number;
       FileType type;
       bool ok = ParseFileName(f, &number, &type);
       if (ok && type == kLogFile) {
-        db_chroot_env_->DeleteFile(dbname_ + "/" + f);
+        db_env_->DeleteFile(dbname_ + "/" + f);
       }
     }
   }
@@ -570,8 +577,8 @@ class BackupableDBTest : public testing::Test {
   std::shared_ptr<Logger> logger_;
 
   // envs
-  unique_ptr<Env> db_chroot_env_;
-  unique_ptr<Env> backup_chroot_env_;
+  unique_ptr<Env> db_env_;
+  unique_ptr<Env> backup_env_;
   unique_ptr<TestEnv> test_db_env_;
   unique_ptr<TestEnv> test_backup_env_;
   unique_ptr<FileManager> file_manager_;
@@ -860,7 +867,7 @@ TEST_F(BackupableDBTest, CorruptionsTest) {
   // assert that we wrote 6 to LATEST_BACKUP
   {
     std::string latest_backup_contents;
-    ReadFileToString(backup_chroot_env_.get(), backupdir_ + "/LATEST_BACKUP",
+    ReadFileToString(backup_env_.get(), backupdir_ + "/LATEST_BACKUP",
                      &latest_backup_contents);
     ASSERT_EQ(std::atol(latest_backup_contents.c_str()), 6);
   }
@@ -960,7 +967,7 @@ TEST_F(BackupableDBTest, NoDeleteWithReadOnly) {
 
   backupable_options_->destroy_old_data = false;
   BackupEngineReadOnly* read_only_backup_engine;
-  ASSERT_OK(BackupEngineReadOnly::Open(backup_chroot_env_.get(),
+  ASSERT_OK(BackupEngineReadOnly::Open(backup_env_.get(),
                                        *backupable_options_,
                                        &read_only_backup_engine));
 
@@ -1137,9 +1144,9 @@ TEST_F(BackupableDBTest, RateLimiting) {
       OpenDBAndBackupEngine(true);
       size_t bytes_written = FillDB(db_.get(), 0, 100000);
 
-      auto start_backup = db_chroot_env_->NowMicros();
+      auto start_backup = db_env_->NowMicros();
       ASSERT_OK(backup_engine_->CreateNewBackup(db_.get(), false));
-      auto backup_time = db_chroot_env_->NowMicros() - start_backup;
+      auto backup_time = db_env_->NowMicros() - start_backup;
       auto rate_limited_backup_time = (bytes_written * kMicrosPerSec) /
                                       backupable_options_->backup_rate_limit;
       ASSERT_GT(backup_time, 0.8 * rate_limited_backup_time);
@@ -1147,9 +1154,9 @@ TEST_F(BackupableDBTest, RateLimiting) {
       CloseDBAndBackupEngine();
 
       OpenBackupEngine();
-      auto start_restore = db_chroot_env_->NowMicros();
+      auto start_restore = db_env_->NowMicros();
       ASSERT_OK(backup_engine_->RestoreDBFromLatestBackup(dbname_, dbname_));
-      auto restore_time = db_chroot_env_->NowMicros() - start_restore;
+      auto restore_time = db_env_->NowMicros() - start_restore;
       CloseBackupEngine();
       auto rate_limited_restore_time = (bytes_written * kMicrosPerSec) /
                                        backupable_options_->restore_rate_limit;
@@ -1175,7 +1182,7 @@ TEST_F(BackupableDBTest, ReadOnlyBackupEngine) {
   test_backup_env_->SetLimitDeleteFiles(0);
   BackupEngineReadOnly* read_only_backup_engine;
   ASSERT_OK(BackupEngineReadOnly::Open(
-      db_chroot_env_.get(), *backupable_options_, &read_only_backup_engine));
+      db_env_.get(), *backupable_options_, &read_only_backup_engine));
   std::vector<BackupInfo> backup_info;
   read_only_backup_engine->GetBackupInfo(&backup_info);
   ASSERT_EQ(backup_info.size(), 2U);
@@ -1210,7 +1217,7 @@ TEST_F(BackupableDBTest, GarbageCollectionBeforeBackup) {
   DestroyDB(dbname_, options_);
   OpenDBAndBackupEngine(true);
 
-  backup_chroot_env_->CreateDirIfMissing(backupdir_ + "/shared");
+  backup_env_->CreateDirIfMissing(backupdir_ + "/shared");
   std::string file_five = backupdir_ + "/shared/000007.sst";
   std::string file_five_contents = "I'm not really a sst file";
   // this depends on the fact that 00007.sst is the first file created by the DB
@@ -1221,7 +1228,7 @@ TEST_F(BackupableDBTest, GarbageCollectionBeforeBackup) {
   ASSERT_TRUE(backup_engine_->CreateNewBackup(db_.get(), true).ok());
 
   std::string new_file_five_contents;
-  ASSERT_OK(ReadFileToString(backup_chroot_env_.get(), file_five,
+  ASSERT_OK(ReadFileToString(backup_env_.get(), file_five,
                              &new_file_five_contents));
   // file 000007.sst was overwritten
   ASSERT_TRUE(new_file_five_contents != file_five_contents);
@@ -1297,9 +1304,9 @@ TEST_F(BackupableDBTest, ChangeManifestDuringBackupCreation) {
   std::string prev_manifest_path =
       DescriptorFileName(dbname_, db_impl->TEST_Current_Manifest_FileNo());
   FillDB(db_.get(), 0, 100);
-  ASSERT_OK(db_chroot_env_->FileExists(prev_manifest_path));
+  ASSERT_OK(db_env_->FileExists(prev_manifest_path));
   ASSERT_OK(db_->Flush(FlushOptions()));
-  ASSERT_TRUE(db_chroot_env_->FileExists(prev_manifest_path).IsNotFound());
+  ASSERT_TRUE(db_env_->FileExists(prev_manifest_path).IsNotFound());
 
   CloseDBAndBackupEngine();
   DestroyDB(dbname_, options_);
@@ -1310,9 +1317,9 @@ TEST_F(BackupableDBTest, ChangeManifestDuringBackupCreation) {
 TEST_F(BackupableDBTest, Issue921Test) {
   BackupEngine* backup_engine;
   backupable_options_->share_table_files = false;
-  backup_chroot_env_->CreateDirIfMissing(backupable_options_->backup_dir);
+  backup_env_->CreateDirIfMissing(backupable_options_->backup_dir);
   backupable_options_->backup_dir += "/new_dir";
-  ASSERT_OK(BackupEngine::Open(backup_chroot_env_.get(), *backupable_options_,
+  ASSERT_OK(BackupEngine::Open(backup_env_.get(), *backupable_options_,
                                &backup_engine));
 
   delete backup_engine;
