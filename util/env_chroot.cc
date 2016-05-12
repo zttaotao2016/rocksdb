@@ -11,7 +11,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <iostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -247,7 +246,6 @@ class ChrootEnv : public EnvWrapper {
     } else if (strlen(normalized_path) < chroot_dir_.size() ||
                strncmp(normalized_path, chroot_dir_.c_str(),
                        chroot_dir_.size()) != 0) {
-      std::cerr << normalized_path << std::endl;
       res.first = Status::IOError(res.second,
                                   "Attempted to access path outside chroot");
     } else {
