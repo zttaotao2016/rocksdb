@@ -44,6 +44,7 @@ class LDBCommand {
   static const std::string ARG_BLOOM_BITS;
   static const std::string ARG_FIX_PREFIX_LEN;
   static const std::string ARG_COMPRESSION_TYPE;
+  static const std::string ARG_COMPRESSION_MAX_DICT_BYTES;
   static const std::string ARG_BLOCK_SIZE;
   static const std::string ARG_AUTO_COMPACTION;
   static const std::string ARG_DB_WRITE_BUFFER_SIZE;
@@ -227,6 +228,15 @@ class LDBCommand {
       const std::string& cmd, const std::vector<std::string>& cmdParams,
       const std::map<std::string, std::string>& option_map,
       const std::vector<std::string>& flags);
+};
+
+class LDBCommandRunner {
+ public:
+  static void PrintHelp(const char* exec_name);
+
+  static void RunCommand(
+      int argc, char** argv, Options options, const LDBOptions& ldb_options,
+      const std::vector<ColumnFamilyDescriptor>* column_families);
 };
 
 }  // namespace rocksdb

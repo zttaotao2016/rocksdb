@@ -279,7 +279,8 @@ TEST_F(OptionsSettableTest, DBOptionsAllFieldsSettable) {
                              "write_thread_max_yield_usec=1000;"
                              "access_hint_on_compaction_start=NONE;"
                              "info_log_level=DEBUG_LEVEL;"
-                             "dump_malloc_stats=false;",
+                             "dump_malloc_stats=false;"
+                             "allow_2pc=false;",
                              new_options));
 
   ASSERT_EQ(unset_bytes_base, NumUnsetBytes(new_options_ptr, sizeof(DBOptions),
@@ -397,6 +398,7 @@ TEST_F(OptionsSettableTest, ColumnFamilyOptionsAllFieldsSettable) {
       "max_bytes_for_level_multiplier=60;"
       "memtable_factory=SkipListFactory;"
       "compression=kNoCompression;"
+      "bottommost_compression=kDisableCompressionOption;"
       "min_partial_merge_operands=7576;"
       "level0_stop_writes_trigger=33;"
       "num_levels=99;"

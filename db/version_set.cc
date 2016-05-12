@@ -1195,10 +1195,23 @@ void VersionStorageInfo::EstimateCompactionBytesNeeded(
   }
 
   // Level 1 and up.
+  uint64_t bytes_next_level = 0;
   for (int level = base_level(); level <= MaxInputLevel(); level++) {
     uint64_t level_size = 0;
-    for (auto* f : files_[level]) {
-      level_size += f->fd.GetFileSize();
+    if (bytes_next_level > 0) {
+#ifndef NDEBUG
+      uint64_t level_size2 = 0;
+      for (auto* f : files_[level]) {
+        level_size2 += f->fd.GetFileSize();
+      }
+      assert(level_size2 == bytes_next_level);
+#endif
+      level_size = bytes_next_level;
+      bytes_next_level = 0;
+    } else {
+      for (auto* f : files_[level]) {
+        level_size += f->fd.GetFileSize();
+      }
     }
     if (level == base_level() && level0_compact_triggered) {
       // Add base level size to compaction if level0 compaction triggered.
@@ -1210,11 +1223,23 @@ void VersionStorageInfo::EstimateCompactionBytesNeeded(
     uint64_t level_target = MaxBytesForLevel(level);
     if (level_size > level_target) {
       bytes_compact_to_next_level = level_size - level_target;
-      // Simplify to assume the actual compaction fan-out ratio is always
-      // mutable_cf_options.max_bytes_for_level_multiplier.
-      estimated_compaction_needed_bytes_ +=
-          bytes_compact_to_next_level *
-          (1 + mutable_cf_options.max_bytes_for_level_multiplier);
+      // Estimate the actual compaction fan-out ratio as size ratio between
+      // the two levels.
+
+      assert(bytes_next_level == 0);
+      if (level + 1 < num_levels_) {
+        for (auto* f : files_[level + 1]) {
+          bytes_next_level += f->fd.GetFileSize();
+        }
+      }
+      if (bytes_next_level > 0) {
+        assert(level_size > 0);
+        estimated_compaction_needed_bytes_ += static_cast<uint64_t>(
+            static_cast<double>(bytes_compact_to_next_level) *
+            (static_cast<double>(bytes_next_level) /
+                 static_cast<double>(level_size) +
+             1));
+      }
     }
   }
 }
@@ -2297,10 +2322,6 @@ Status VersionSet::LogAndApply(ColumnFamilyData* column_family_data,
     if (s.ok() && new_descriptor_log) {
       s = SetCurrentFile(env_, dbname_, pending_manifest_file_number_,
                          db_options_->disableDataSync ? nullptr : db_directory);
-      // Leave the old file behind since PurgeObsoleteFiles will take care of it
-      // later. It's unsafe to delete now since file deletion may be disabled.
-      obsolete_manifests_.emplace_back(
-          DescriptorFileName("", manifest_file_number_));
     }
 
     if (s.ok()) {
@@ -2317,6 +2338,13 @@ Status VersionSet::LogAndApply(ColumnFamilyData* column_family_data,
     LogFlush(db_options_->info_log);
     TEST_SYNC_POINT("VersionSet::LogAndApply:WriteManifestDone");
     mu->Lock();
+  }
+
+  // Append the old mainfest file to the obsolete_manifests_ list to be deleted
+  // by PurgeObsoleteFiles later.
+  if (s.ok() && new_descriptor_log) {
+    obsolete_manifests_.emplace_back(
+        DescriptorFileName("", manifest_file_number_));
   }
 
   // Install the new version
