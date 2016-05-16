@@ -295,3 +295,6 @@ add_library(rocksdb${ARTIFACT_SUFFIX} SHARED ${SOURCES})
 set_target_properties(rocksdb${ARTIFACT_SUFFIX} PROPERTIES COMPILE_FLAGS "-DROCKSDB_DLL -DROCKSDB_LIBRARY_EXPORTS /Fd${CMAKE_CFG_INTDIR}/rocksdb${ARTIFACT_SUFFIX}.pdb")
 add_dependencies(rocksdb${ARTIFACT_SUFFIX} GenerateBuildVersion)
 target_link_libraries(rocksdb${ARTIFACT_SUFFIX} ${LIBS})
+
+add_executable(mydb mydb/mydb.cpp )
+target_link_libraries(mydb rocksdblib${ARTIFACT_SUFFIX} ${LIBS})
